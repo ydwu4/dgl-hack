@@ -92,6 +92,14 @@ void BinaryOpReduce(
     runtime::NDArray lhs_mapping, runtime::NDArray rhs_mapping,
     runtime::NDArray out_mapping);
 
+void FusedGatKernel(
+    const CSRWrapper& graph,
+    runtime::NDArray feat_src,
+    runtime::NDArray el,
+    runtime::NDArray er,
+    runtime::NDArray ret
+);
+
 /*!
  * \brief Compute the lhs gradient of BinaryOpReduce
  *

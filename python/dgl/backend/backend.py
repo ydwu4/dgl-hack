@@ -1224,6 +1224,33 @@ def binary_reduce(reducer, binary_op, graph, lhs, rhs, lhs_data, rhs_data,
     """
     pass
 
+###############################################################################
+# A baseline implementation for GAT with hand-written fused kernel.
+
+## In new api, the following code are captured
+# coeff = [leaky_relu(exp(el + er)) for encode in encoded_feat]
+# s = sum(coeff)
+# alpha = [s/c for c in coeff]
+# return sum([feat[0] * feat[1] for feat in zip(alpha, encoded_feat)])
+def fused_gat(graph, feat_src, el, er):
+    """
+    graph : GraphIndex
+        The graph
+    feat_src : Tensor
+        The input node feature matrix of dim N * out_feat_size
+    el : Tensor
+        The lhs data of dim N * num_heads. Corresponding to the same variable in DGL's implementation of GAT
+    er: Tensor
+        The rhs data of dim N * num_heads. Corresponding to the same variable in DGL's implementation of GAT
+    
+    Returns
+    -------
+    Tensor
+        The GAT embeding.
+    """
+    pass
+
+
 def copy_reduce(reducer, graph, target, in_data, out_size, in_map, out_map):
     """Copy target data and perform reduce based on graph structure.
 

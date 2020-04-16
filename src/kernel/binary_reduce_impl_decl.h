@@ -110,6 +110,11 @@ void BinaryReduceImpl(
     runtime::NDArray lhs_data, runtime::NDArray rhs_data, runtime::NDArray out_data,
     runtime::NDArray lhs_mapping, runtime::NDArray rhs_mapping, runtime::NDArray out_mapping);
 
+void FusedGatKernelImpl(
+    const CSRWrapper& graph,
+    runtime::NDArray feat_src, runtime::NDArray el, runtime::NDArray er, runtime::NDArray ret
+);
+
 ///////////////////////////////////////////////////////////////////////////////
 // BackwardBinaryReduce declarations
 ///////////////////////////////////////////////////////////////////////////////

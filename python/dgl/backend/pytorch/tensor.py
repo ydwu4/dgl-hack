@@ -6,6 +6,7 @@ import scipy # Weird bug in new pytorch when import scipy after import torch
 import torch as th
 import builtins
 from torch.utils import dlpack
+import dgl.utils as utils
 
 from ... import ndarray as nd
 from ... import kernel as K
@@ -378,6 +379,28 @@ def binary_reduce(reducer, binary_op, graph, lhs, rhs, lhs_data, rhs_data,
     return BinaryReduce.apply(
             reducer, binary_op, graph, lhs, rhs, lhs_data, rhs_data, out_data,
             out_size, lhs_map, rhs_map, out_map)
+            
+class FusedGat(th.autograd.Function):
+    @staticmethod
+    def forward(ctx, graph, feat_src, el, er, ret):
+        print("Forward fused gat", ret)
+        feat_src_nd = zerocopy_to_dgl_ndarray(feat_src)
+        el_nd = zerocopy_to_dgl_ndarray(el)
+        er_nd = zerocopy_to_dgl_ndarray(er)
+        ret_nd = zerocopy_to_dgl_ndarray(ret)
+        ctx.backward_cache = feat_src, el, er, ret
+        K.fused_gat_kernel(graph, feat_src_nd, el_nd, er_nd, ret_nd)
+        return ret
+    @staticmethod
+    def backward(ctx, gradout):
+        print("Backward fused gat")
+        feat_src, el, er, ret = ctx.backward_cache
+        return ret
+
+def fused_gat(graph, feat_src, el, er):
+    g = graph._graph.get_immutable_gidx(utils.to_dgl_context(context(feat_src)))
+    ret = th.empty_like(feat_src)
+    return FusedGat.apply(g, feat_src, el, er, ret)
 
 
 class CopyReduce(th.autograd.Function):
