@@ -5,12 +5,13 @@ from torch import nn
 
 import time
 from .... import function as fn
+from .... import backend as B
 from ..softmax import edge_softmax
 from ..utils import Identity
 from ....utils import expand_as_pair
 
 # pylint: enable=W0235
-class GATConv(nn.Module):
+class FusedGATConv(nn.Module):
     r"""Apply `Graph Attention Network <https://arxiv.org/pdf/1710.10903.pdf>`__
     over an input signal.
 
@@ -59,7 +60,7 @@ class GATConv(nn.Module):
                  negative_slope=0.2,
                  residual=False,
                  activation=None):
-        super(GATConv, self).__init__()
+        super(FusedGATConv, self).__init__()
         self._num_heads = num_heads
         self._in_src_feats, self._in_dst_feats = expand_as_pair(in_feats)
         self._out_feats = out_feats
@@ -141,21 +142,11 @@ class GATConv(nn.Module):
         # which further speeds up computation and saves memory footprint.
         el = (feat_src * self.attn_l).sum(dim=-1).unsqueeze(-1)
         er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
+
         start_t = time.time()
-
-        graph.srcdata.update({'ft': feat_src, 'el': el})
-        graph.dstdata.update({'er': er})
-        # compute edge attention, el and er are a_l Wh_i and a_r Wh_j respectively.
-        graph.apply_edges(fn.u_add_v('el', 'er', 'e'))
-        e = self.leaky_relu(graph.edata.pop('e'))
-        # compute softmax
-        graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
-        # message passing
-        graph.update_all(fn.u_mul_e('ft', 'a', 'm'),
-                         fn.sum('m', 'ft'))
-        rst = graph.dstdata['ft']
-
+        rst = B.fused_gat(graph, feat_src, el, er)
         end_t = time.time()
+
         print("Foward time of graph propogation:", end_t-start_t, "s")
         # residual
         if self.res_fc is not None:

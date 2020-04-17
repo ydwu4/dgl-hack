@@ -383,7 +383,6 @@ def binary_reduce(reducer, binary_op, graph, lhs, rhs, lhs_data, rhs_data,
 class FusedGat(th.autograd.Function):
     @staticmethod
     def forward(ctx, graph, feat_src, el, er, ret):
-        print("Forward fused gat", ret)
         feat_src_nd = zerocopy_to_dgl_ndarray(feat_src)
         el_nd = zerocopy_to_dgl_ndarray(el)
         er_nd = zerocopy_to_dgl_ndarray(er)
@@ -393,9 +392,8 @@ class FusedGat(th.autograd.Function):
         return ret
     @staticmethod
     def backward(ctx, gradout):
-        print("Backward fused gat")
         feat_src, el, er, ret = ctx.backward_cache
-        return ret
+        return None, None, None, None, None
 
 def fused_gat(graph, feat_src, el, er):
     g = graph._graph.get_immutable_gidx(utils.to_dgl_context(context(feat_src)))

@@ -27,6 +27,7 @@ namespace kernel {
 // BinaryReduce device-agnostic implementation
 ///////////////////////////////////////////////////////////////////////////////
 
+
 template <int XPU, typename Idx, typename DType, typename Reducer>
 GData<Idx, DType> AllocGData(const std::string& op,
     const DLContext& ctx, int64_t x_len,
@@ -111,16 +112,6 @@ void BinaryReduceImpl(
     });
   });
 }
-
-void FusedGatKernelImpl(
-    const CSRWrapper& graph,
-    runtime::NDArray feat_src, runtime::NDArray el, runtime::NDArray er, runtime::NDArray ret) {
-      // zero out ret, and packing feat_src, el, er, ret, graph together into one struct using raw data pointers
-      // get csr matrix:
-      //    auto outcsr = graph.GetOutCSRMatrix();
-      // write a device function and call it from here
-    }
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // BackwardBinaryReduce device-agnostic implementation

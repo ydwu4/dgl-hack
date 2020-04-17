@@ -48,6 +48,18 @@ struct GData {
   Idx *out_mapping{nullptr};
 };
 
+template <typename Idx, typename DType>
+struct GatFusedData {
+  // length along x(feature) dimension
+  int64_t x_length{0};
+  // size of data, can be single value or a vector
+  int64_t data_len{0};
+  // input data
+  DType *feat_src{nullptr}, *el{nullptr};
+  // output data
+  DType *er{nullptr}, *ret{nullptr};
+};
+
 /*!
  * \brief Template declaration for BinaryReduce operator.
  *

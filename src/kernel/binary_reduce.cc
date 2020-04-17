@@ -292,19 +292,6 @@ DGL_REGISTER_GLOBAL("kernel._CAPI_DGLKernelInferBinaryFeatureShape")
     *rv = ret;
   });
 
-void FusedGatKernel(
-    const CSRWrapper& graph,
-    runtime::NDArray feat_src,
-    runtime::NDArray el,
-    runtime::NDArray er,
-    runtime::NDArray ret) {
-      const auto& ctx = graph.Contex();
-      CheckCtx(ctx, {feat_src, el, er, ret},
-          {"feat_src", "el", "er", "ret"});
-      FusedGatKernelImpl(graph, feat_src, el, er, ret)
-    }
-
-
 void BinaryOpReduce(
     const std::string& reducer,
     const std::string& op,
@@ -401,7 +388,9 @@ DGL_REGISTER_GLOBAL("kernel._CAPI_DGLFusedGatKernel")
   NDArray er = args[3];
   NDArray ret = args[4];
   LOG(INFO) << "Pass to c++ runtime";
-  FusedGatKernel(wrapper, feat_src, el, er, ret);
+  const auto& ctx = wrapper.Context();
+  CheckCtx(ctx, {feat_src, el, er, ret}, {"feat_src", "el", "er", "ret"});
+  FusedGatKernelImpl(wrapper, feat_src, el, er, ret);
 });
 
 void BackwardLhsBinaryOpReduce(

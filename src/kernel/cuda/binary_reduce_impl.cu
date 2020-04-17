@@ -11,6 +11,37 @@ using dgl::runtime::NDArray;
 namespace dgl {
 namespace kernel {
 
+template <typename Idx, typename DType>
+__global__ void gatKernel(GatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
+    // pass
+}
+
+void FusedGatKernelImpl(
+    const CSRWrapper& graph,
+    runtime::NDArray feat_src,
+    runtime::NDArray el,
+    runtime::NDArray er,
+    runtime::NDArray ret) {
+        typedef int32_t Idx ;
+        typedef float DType;
+        // zero out ret, and packing feat_src, el, er, ret, graph together into one struct using raw float pointers
+        // get csr matrix
+        GatFusedData<Idx, DType> gdata;
+        int64_t el_xlen =  utils::ComputeXLength(el);
+        int64_t feat_src_xlen =  utils::ComputeXLength(feat_src);
+        int64_t ret_len =  utils::ComputeXLength(ret);
+        gdata.feat_src = static_cast<DType*>(feat_src->data);
+        gdata.el = static_cast<DType*>(el->data);
+        gdata.er = static_cast<DType*>(er->data);
+        // TODO: Fill ret with zero
+        gdata.ret = static_cast<DType*>(ret->data);
+        auto incsr = graph.GetInCSRMatrix();
+        minigun::Csr<Idx> csr = utils::CreateCsr<Idx>(incsr.indptr, incsr.indices);
+        // write a device function and call it from here
+        auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+        gatKernel<<<32, 32, 0, thr_entry->stream>>>(gdata, csr);
+    }
+
 template void BinaryReduceImpl<kDLGPU>(
     const std::string& reducer,
     const std::string& op,
