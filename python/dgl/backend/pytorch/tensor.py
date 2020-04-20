@@ -382,23 +382,27 @@ def binary_reduce(reducer, binary_op, graph, lhs, rhs, lhs_data, rhs_data,
             
 class FusedGat(th.autograd.Function):
     @staticmethod
-    def forward(ctx, graph, feat_src, el, er, ret):
+    def forward(ctx, graph, feat_src, el, er, s, exp, ret, slope):
         feat_src_nd = zerocopy_to_dgl_ndarray(feat_src)
         el_nd = zerocopy_to_dgl_ndarray(el)
         er_nd = zerocopy_to_dgl_ndarray(er)
+        s_nd = zerocopy_to_dgl_ndarray(s)
+        exp_nd = zerocopy_to_dgl_ndarray(exp)
         ret_nd = zerocopy_to_dgl_ndarray(ret)
-        ctx.backward_cache = feat_src, el, er, ret
-        K.fused_gat_kernel(graph, feat_src_nd, el_nd, er_nd, ret_nd)
+        ctx.backward_cache = feat_src, el, er, s_nd, exp_nd, ret, slope
+        K.fused_gat_kernel(graph, feat_src_nd, el_nd, er_nd, s_nd, exp_nd, ret_nd, slope)
         return ret
     @staticmethod
     def backward(ctx, gradout):
         feat_src, el, er, ret = ctx.backward_cache
-        return None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
-def fused_gat(graph, feat_src, el, er):
+def fused_gat(graph, feat_src, el, er, slope):
     g = graph._graph.get_immutable_gidx(utils.to_dgl_context(context(feat_src)))
+    s = th.empty_like(el)
+    exp = th.empty_like(el)
     ret = th.empty_like(feat_src)
-    return FusedGat.apply(g, feat_src, el, er, ret)
+    return FusedGat.apply(g, feat_src, el, er, s, exp, ret, slope)
 
 
 class CopyReduce(th.autograd.Function):

@@ -52,12 +52,14 @@ def main(args):
     n_classes = data.num_labels
     n_edges = data.graph.number_of_edges()
     print("""----Data statistics------'
+      #num_feats %d
+      #num_nodes %d
       #Edges %d
       #Classes %d 
       #Train samples %d
       #Val samples %d
       #Test samples %d""" %
-          (n_edges, n_classes,
+          (num_feats, features.shape[0], n_edges, n_classes,
            train_mask.int().sum().item(),
            val_mask.int().sum().item(),
            test_mask.int().sum().item()))

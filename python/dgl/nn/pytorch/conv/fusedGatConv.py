@@ -77,6 +77,7 @@ class FusedGATConv(nn.Module):
         self.feat_drop = nn.Dropout(feat_drop)
         self.attn_drop = nn.Dropout(attn_drop)
         self.leaky_relu = nn.LeakyReLU(negative_slope)
+        self.negative_slope = negative_slope
         if residual:
             if self._in_dst_feats != out_feats:
                 self.res_fc = nn.Linear(
@@ -144,7 +145,7 @@ class FusedGATConv(nn.Module):
         er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
 
         start_t = time.time()
-        rst = B.fused_gat(graph, feat_src, el, er)
+        rst = B.fused_gat(graph, feat_src, el, er, self.negative_slope)
         end_t = time.time()
 
         print("Foward time of graph propogation:", end_t-start_t, "s")

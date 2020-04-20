@@ -50,14 +50,19 @@ struct GData {
 
 template <typename Idx, typename DType>
 struct GatFusedData {
-  // length along x(feature) dimension
-  int64_t x_length{0};
-  // size of data, can be single value or a vector
-  int64_t data_len{0};
-  // input data
-  DType *feat_src{nullptr}, *el{nullptr};
-  // output data
-  DType *er{nullptr}, *ret{nullptr};
+  // feat_size size along feature dimension
+  Idx feat_src_xlen{0};
+  Idx e_xlen{0};
+  Idx ret_xlen{0};
+  // num nodes
+  Idx n{0};
+  DType leaky_relu_slope;
+  // Inputs
+  DType *feat_src{nullptr}, *el{nullptr}, *er{nullptr};
+  // Intermediates
+  DType  *sum{nullptr}, *exp{nullptr};
+  // Output
+  DType *ret{nullptr};
 };
 
 /*!
@@ -124,8 +129,10 @@ void BinaryReduceImpl(
 
 void FusedGatKernelImpl(
     const CSRWrapper& graph,
-    runtime::NDArray feat_src, runtime::NDArray el, runtime::NDArray er, runtime::NDArray ret
-);
+    runtime::NDArray feat_src, runtime::NDArray el, runtime::NDArray er, 
+    runtime::NDArray sum, runtime::NDArray exp,
+    runtime::NDArray ret, float leaky_relu_slope);
+
 
 ///////////////////////////////////////////////////////////////////////////////
 // BackwardBinaryReduce declarations

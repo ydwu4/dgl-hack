@@ -386,11 +386,13 @@ DGL_REGISTER_GLOBAL("kernel._CAPI_DGLFusedGatKernel")
   NDArray feat_src = args[1];
   NDArray el = args[2];
   NDArray er = args[3];
-  NDArray ret = args[4];
-  LOG(INFO) << "Pass to c++ runtime";
+  NDArray sum = args[4];
+  NDArray exp = args[5];
+  NDArray ret = args[6];
+  float slope = double(args[7]);
   const auto& ctx = wrapper.Context();
-  CheckCtx(ctx, {feat_src, el, er, ret}, {"feat_src", "el", "er", "ret"});
-  FusedGatKernelImpl(wrapper, feat_src, el, er, ret);
+  CheckCtx(ctx, {feat_src, el, er, sum, exp, ret}, {"feat_src", "el", "er", "sum", "exp", "ret"});
+  FusedGatKernelImpl(wrapper, feat_src, el, er, sum, exp, ret, slope);
 });
 
 void BackwardLhsBinaryOpReduce(

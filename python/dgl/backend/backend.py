@@ -1232,7 +1232,7 @@ def binary_reduce(reducer, binary_op, graph, lhs, rhs, lhs_data, rhs_data,
 # s = sum(coeff)
 # alpha = [s/c for c in coeff]
 # return sum([feat[0] * feat[1] for feat in zip(alpha, encoded_feat)])
-def fused_gat(graph, feat_src, el, er):
+def fused_gat(graph, feat_src, el, er, sum, exp, ret, slope):
     """
     graph : GraphIndex
         The graph
