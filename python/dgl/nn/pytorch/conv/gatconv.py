@@ -141,7 +141,6 @@ class GATConv(nn.Module):
         # which further speeds up computation and saves memory footprint.
         el = (feat_src * self.attn_l).sum(dim=-1).unsqueeze(-1)
         er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
-        start_t = time.time()
 
         graph.srcdata.update({'ft': feat_src, 'el': el})
         graph.dstdata.update({'er': er})
@@ -155,8 +154,6 @@ class GATConv(nn.Module):
                          fn.sum('m', 'ft'))
         rst = graph.dstdata['ft']
 
-        end_t = time.time()
-        print("Foward time of graph propogation:", end_t-start_t, "s")
         # residual
         if self.res_fc is not None:
             resval = self.res_fc(h_dst).view(h_dst.shape[0], -1, self._out_feats)

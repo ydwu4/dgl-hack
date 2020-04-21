@@ -144,11 +144,7 @@ class FusedGATConv(nn.Module):
         el = (feat_src * self.attn_l).sum(dim=-1).unsqueeze(-1)
         er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
 
-        start_t = time.time()
         rst = B.fused_gat(graph, feat_src, el, er, self.negative_slope)
-        end_t = time.time()
-
-        print("Foward time of graph propogation:", end_t-start_t, "s")
         # residual
         if self.res_fc is not None:
             resval = self.res_fc(h_dst).view(h_dst.shape[0], -1, self._out_feats)

@@ -52,6 +52,7 @@ template <typename Idx, typename DType>
 struct GatFusedData {
   // feat_size size along feature dimension
   Idx feat_src_xlen{0};
+  Idx feat_src_hidden{0};
   Idx e_xlen{0};
   Idx ret_xlen{0};
   // num nodes

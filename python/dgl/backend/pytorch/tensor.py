@@ -389,12 +389,12 @@ class FusedGat(th.autograd.Function):
         s_nd = zerocopy_to_dgl_ndarray(s)
         exp_nd = zerocopy_to_dgl_ndarray(exp)
         ret_nd = zerocopy_to_dgl_ndarray(ret)
-        ctx.backward_cache = feat_src, el, er, s_nd, exp_nd, ret, slope
+        ctx.backward_cache = feat_src, el, er, s, exp, ret, slope
         K.fused_gat_kernel(graph, feat_src_nd, el_nd, er_nd, s_nd, exp_nd, ret_nd, slope)
         return ret
     @staticmethod
     def backward(ctx, gradout):
-        feat_src, el, er, ret = ctx.backward_cache
+        feat_src, el, er, s, exp, ret, slope = ctx.backward_cache
         return None, None, None, None, None, None, None, None
 
 def fused_gat(graph, feat_src, el, er, slope):
