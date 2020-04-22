@@ -144,7 +144,13 @@ class FusedGATConv(nn.Module):
         el = (feat_src * self.attn_l).sum(dim=-1).unsqueeze(-1)
         er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
 
+        th.cuda.synchronize()
+        start_t = time.time()
         rst = B.fused_gat(graph, feat_src, el, er, self.negative_slope)
+        th.cuda.synchronize()
+        end_t = time.time()
+        print("It takes ", end_t-start_t, " s to do fused_gat")
+
         # residual
         if self.res_fc is not None:
             resval = self.res_fc(h_dst).view(h_dst.shape[0], -1, self._out_feats)

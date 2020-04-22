@@ -21,6 +21,7 @@ __device__ DType gatLeakyReluExp(DType val, DType slope) {
 
 template <typename Idx, typename DType>
 __global__ void gatExpLeakyReluSumKernel(GatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
+    extern __shared__ DType er[];
     Idx tx = blockIdx.x * blockDim.x + threadIdx.x;
     Idx ty = blockIdx.y * blockDim.y + threadIdx.y;
     Idx stride_x = blockDim.x * gridDim.x;
@@ -32,12 +33,17 @@ __global__ void gatExpLeakyReluSumKernel(GatFusedData<Idx, DType> gdata, minigun
         Idx start_off = *(csr.row_offsets.data + dst_vid);
         Idx end_off = *(csr.row_offsets.data + dst_vid + 1);
         while (feat_idx < e_xlen) {
+            // 1. Load dstnation vertex into shared memory
+            Idx feat_off_dst = dst_vid * e_xlen + feat_idx;
+            er[threadIdx.x] = gdata.er[feat_off_dst];
+            __syncthreads();
+            // 2. Do the computation
             DType sum = 0.;
             for (Idx eid=start_off; eid<end_off; ++eid) {
                 Idx src_id = *(csr.column_indices.data + eid);
                 Idx feat_off_src = src_id * e_xlen + feat_idx;
-                Idx feat_off_dst = dst_vid * e_xlen + feat_idx;
-                DType tmp = gatLeakyReluExp(gdata.el[feat_off_src] + gdata.er[feat_off_dst], gdata.leaky_relu_slope);
+                DType tmp = gatLeakyReluExp(gdata.el[feat_off_src] + er[threadIdx.x], gdata.leaky_relu_slope);
+                //DType tmp = gatLeakyReluExp(gdata.el[feat_off_src] + gdata.er[feat_off_dst], gdata.leaky_relu_slope);
                 gdata.exp[Idx(eid * e_xlen) + feat_idx] = tmp;
                 sum += tmp;
             }
@@ -48,38 +54,38 @@ __global__ void gatExpLeakyReluSumKernel(GatFusedData<Idx, DType> gdata, minigun
     }
 }
 
-template <typename Idx, typename DType>
-__global__ void gatSumProdZipDivKernel(GatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
-    Idx tx = blockIdx.x * blockDim.x + threadIdx.x;
-    Idx ty = blockIdx.y * blockDim.y + threadIdx.y;
-    Idx stride_x = blockDim.x * gridDim.x;
-    Idx stride_y = blockDim.y * gridDim.y;
-    DType e_xlen = gdata.e_xlen;
-    DType feat_src_xlen = gdata.feat_src_xlen;
-    Idx dst_vid = ty;
-    while (dst_vid < csr.row_offsets.length) {
-        Idx start_off = *(csr.row_offsets.data + dst_vid);
-        Idx end_off = *(csr.row_offsets.data + dst_vid + 1);
-        Idx head_offset = tx;
-        while (head_offset < e_xlen) {
-            DType ret = 0.;
-            Idx hidden_offset = threadIdx.y;
-            while (hidden_offset < gdata.feat_src_hidden) {
-                for (Idx eid=start_off; eid<end_off; ++eid) {
-                    Idx src_id = *(csr.column_indices + eid);
-                    DType ex = *(gdata.exp + src_id*e_xlen + head_offset);
-                    DType s = *(gdata.sum + dst_vid * e_xlen + head_offset);
-                    DType feat_src = *(gdata.feat_src + src_id * feat_src_xlen + head_offset * gdata.feat_src_hidden + hidden_offset);
-                    ret += ex/s*feat_src;
-                }
-                gdata.ret[gdata.feat_src + src_id * feat_src_xlen + head_offset * gdata.feat_src_hidden + hidden_offset] = ret;
-                hidden_offset += blockDim.y;
-            }
-            head_offset += stride_x;
-        }
-        dst_vid += stride_y;
-    }
-}
+//template <typename Idx, typename DType>
+//__global__ void gatSumProdZipDivKernel(GatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
+//    Idx tx = blockIdx.x * blockDim.x + threadIdx.x;
+//    Idx ty = blockIdx.y * blockDim.y + threadIdx.y;
+//    Idx stride_x = blockDim.x * gridDim.x;
+//    Idx stride_y = blockDim.y * gridDim.y;
+//    DType e_xlen = gdata.e_xlen;
+//    DType feat_src_xlen = gdata.feat_src_xlen;
+//    Idx dst_vid = ty;
+//    while (dst_vid < csr.row_offsets.length) {
+//        Idx start_off = *(csr.row_offsets.data + dst_vid);
+//        Idx end_off = *(csr.row_offsets.data + dst_vid + 1);
+//        Idx head_offset = tx;
+//        while (head_offset < e_xlen) {
+//            DType ret = 0.;
+//            Idx hidden_offset = threadIdx.y;
+//            while (hidden_offset < gdata.feat_src_hidden) {
+//                for (Idx eid=start_off; eid<end_off; ++eid) {
+//                    Idx src_id = *(csr.column_indices + eid);
+//                    DType ex = *(gdata.exp + src_id*e_xlen + head_offset);
+//                    DType s = *(gdata.sum + dst_vid * e_xlen + head_offset);
+//                    DType feat_src = *(gdata.feat_src + src_id * feat_src_xlen + head_offset * gdata.feat_src_hidden + hidden_offset);
+//                    ret += ex/s*feat_src;
+//                }
+//                gdata.ret[gdata.feat_src + src_id * feat_src_xlen + head_offset * gdata.feat_src_hidden + hidden_offset] = ret;
+//                hidden_offset += blockDim.y;
+//            }
+//            head_offset += stride_x;
+//        }
+//        dst_vid += stride_y;
+//    }
+//}
 
 void FusedGatKernelImpl(
     const CSRWrapper& graph,
@@ -120,23 +126,22 @@ void FusedGatKernelImpl(
 
         // Configure kernel launch parameters.
         auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
-        int max_xlen = std::max(feat_src_xlen, el_xlen);
-        int nthrs_x = utils::FindNumThreads(max_xlen, 64);
+        int nthrs_x = 32;
         int nthrs_y = 1;
-        int nblks_x = (max_xlen + nthrs_x-1)/(nthrs_x);
+        int nblks_x = (el_xlen + nthrs_x-1)/(nthrs_x);
         int nblks_y = std::min((gdata.n + nthrs_y -1)/nthrs_y, MAX_NBLKS);
         const dim3 nblks(nblks_x, nblks_y);
         const dim3 nthrs(nthrs_x, nthrs_y);
         LOG(INFO) << "blk dim:" << nblks_x << "*" <<nblks_y << " nthrs:" <<nthrs_x << "*" << nthrs_y;
-        gatExpLeakyReluSumKernel<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, csr);
+        gatExpLeakyReluSumKernel<<<nblks, nthrs, el_xlen*sizeof(DType), thr_entry->stream>>>(gdata, csr);
 
-        nthrs_x = feat_src_xlen / gdata.feat_src_hidden;
-        nthrs_y = gdata.feat_src_hidden;
-        nblks_x = 1;
-        nblks_y = std::min((gdata.n + nthrs_y -1)/nthrs_y, MAX_NBLKS);
-        const dim3 nblks2(nblks_x, nblks_y);
-        const dim3 nthrs2(nthrs_x, nthrs_y);
-        gatSumProdZipDivKernel<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, csr);
+        //nthrs_x = feat_src_xlen / gdata.feat_src_hidden;
+        //nthrs_y = gdata.feat_src_hidden;
+        //nblks_x = 1;
+        //nblks_y = std::min((gdata.n + nthrs_y -1)/nthrs_y, MAX_NBLKS);
+        //const dim3 nblks2(nblks_x, nblks_y);
+        //const dim3 nthrs2(nthrs_x, nthrs_y);
+        //gatSumProdZipDivKernel<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, csr);
     }
 
 template void BinaryReduceImpl<kDLGPU>(

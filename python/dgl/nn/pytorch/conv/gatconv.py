@@ -142,18 +142,22 @@ class GATConv(nn.Module):
         el = (feat_src * self.attn_l).sum(dim=-1).unsqueeze(-1)
         er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
 
+        th.cuda.synchronize()
+        start_t = time.time()
         graph.srcdata.update({'ft': feat_src, 'el': el})
         graph.dstdata.update({'er': er})
         # compute edge attention, el and er are a_l Wh_i and a_r Wh_j respectively.
         graph.apply_edges(fn.u_add_v('el', 'er', 'e'))
         e = self.leaky_relu(graph.edata.pop('e'))
         # compute softmax
+        th.cuda.synchronize()
+        end_t = time.time()
         graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
         # message passing
         graph.update_all(fn.u_mul_e('ft', 'a', 'm'),
                          fn.sum('m', 'ft'))
         rst = graph.dstdata['ft']
-
+        print("It takes ", end_t-start_t, " s to do dgl_gat")
         # residual
         if self.res_fc is not None:
             resval = self.res_fc(h_dst).view(h_dst.shape[0], -1, self._out_feats)
