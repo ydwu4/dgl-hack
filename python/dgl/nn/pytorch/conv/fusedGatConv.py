@@ -10,6 +10,8 @@ from ..softmax import edge_softmax
 from ..utils import Identity
 from ....utils import expand_as_pair
 
+
+
 # pylint: enable=W0235
 class FusedGATConv(nn.Module):
     r"""Apply `Graph Attention Network <https://arxiv.org/pdf/1710.10903.pdf>`__
@@ -88,6 +90,7 @@ class FusedGATConv(nn.Module):
             self.register_buffer('res_fc', None)
         self.reset_parameters()
         self.activation = activation
+        self.first_run = True
 
     def reset_parameters(self):
         """Reinitialize learnable parameters."""
@@ -151,6 +154,26 @@ class FusedGATConv(nn.Module):
         end_t = time.time()
         print("It takes ", end_t-start_t, " s to do fused_gat")
 
+        if self.first_run:
+            start_t = time.time()
+            graph.srcdata.update({'ft': feat_src, 'el': el})
+            graph.dstdata.update({'er': er})
+            # compute edge attention, el and er are a_l Wh_i and a_r Wh_j respectively.
+            graph.apply_edges(fn.u_add_v('el', 'er', 'e'))
+            e = self.leaky_relu(graph.edata.pop('e'))
+            # compute softmax
+            graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
+            # message passing
+            graph.update_all(fn.u_mul_e('ft', 'a', 'm'),
+                             fn.sum('m', 'ft'))
+            rst2 = graph.dstdata['ft']
+            th.cuda.synchronize()
+            end_t = time.time()
+            print("It takes ", end_t-start_t, " s to do dgl_gat")
+            print("rst2(gat) == rst(fusedgat)?", th.eq(rst, rst2))
+            self.first_run = False
+          
+
         # residual
         if self.res_fc is not None:
             resval = self.res_fc(h_dst).view(h_dst.shape[0], -1, self._out_feats)
@@ -159,3 +182,4 @@ class FusedGATConv(nn.Module):
         if self.activation:
             rst = self.activation(rst)
         return rst
+

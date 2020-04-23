@@ -141,6 +141,7 @@ class GATConv(nn.Module):
         # which further speeds up computation and saves memory footprint.
         el = (feat_src * self.attn_l).sum(dim=-1).unsqueeze(-1)
         er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
+        print("feat_src shape", feat_src.size(), "el shape", el.size(), "er shape", er.size())
 
         th.cuda.synchronize()
         start_t = time.time()
@@ -150,13 +151,13 @@ class GATConv(nn.Module):
         graph.apply_edges(fn.u_add_v('el', 'er', 'e'))
         e = self.leaky_relu(graph.edata.pop('e'))
         # compute softmax
-        th.cuda.synchronize()
-        end_t = time.time()
         graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
         # message passing
         graph.update_all(fn.u_mul_e('ft', 'a', 'm'),
                          fn.sum('m', 'ft'))
         rst = graph.dstdata['ft']
+        th.cuda.synchronize()
+        end_t = time.time()
         print("It takes ", end_t-start_t, " s to do dgl_gat")
         # residual
         if self.res_fc is not None:

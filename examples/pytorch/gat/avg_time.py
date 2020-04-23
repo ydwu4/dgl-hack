@@ -12,4 +12,6 @@ for line in sys.stdin:
             continue
         s += float(line.split()[2])
         count += 1
+    if "rst2(gat)" in line:
+        print(line)
 print("On average it takes ", s/count, "s", " first iter time ", first_iter_time, "s")

@@ -399,8 +399,8 @@ class FusedGat(th.autograd.Function):
 
 def fused_gat(graph, feat_src, el, er, slope):
     g = graph._graph.get_immutable_gidx(utils.to_dgl_context(context(feat_src)))
+    exp = el.new_empty([g.number_of_edges()] + list(el.size()[1:]))
     s = th.empty_like(el)
-    exp = th.empty_like(el)
     ret = th.empty_like(feat_src)
     return FusedGat.apply(g, feat_src, el, er, s, exp, ret, slope)
 
