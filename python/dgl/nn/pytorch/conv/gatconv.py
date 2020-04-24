@@ -141,7 +141,6 @@ class GATConv(nn.Module):
         # which further speeds up computation and saves memory footprint.
         el = (feat_src * self.attn_l).sum(dim=-1).unsqueeze(-1)
         er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
-        print("feat_src shape", feat_src.size(), "el shape", el.size(), "er shape", er.size())
 
         th.cuda.synchronize()
         start_t = time.time()

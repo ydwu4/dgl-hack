@@ -4,9 +4,9 @@ import dgl
 import dgl.backend as B
 from dgl import function as fn
 
-NUM_NODES=102400
+NUM_NODES=65536
 NUM_HEADS=64
-NUM_HIDDEN=64
+NUM_HIDDEN=128
 negative_slope = 0.2
 dropout_ratio = 0.6
 th.cuda.set_device(0)
@@ -34,6 +34,7 @@ def expected_output():
     g.edata['out'] = th.exp(e)
     g.update_all(fn.copy_e('out', 'm'), fn.sum('m', 'out_sum'))
     g.apply_edges(fn.e_div_v('out', 'out_sum', 'out'))
+    # Omit attn_drop for deterministic execution
     g.edata['a'] = (g.edata['out'])
     # message passing
     g.update_all(fn.u_mul_e('ft', 'a', 'm'),

@@ -22,29 +22,29 @@ __device__ DType gatLeakyReluExp(DType val, DType slope) {
 
 template <typename Idx, typename DType>
 __global__ void gatExpLeakyReluSumKernel(GatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
-    extern __shared__ DType er[];
+    //extern __shared__ DType er[];
     Idx tx = blockIdx.x * blockDim.x + threadIdx.x;
     Idx ty = blockIdx.y * blockDim.y + threadIdx.y;
     Idx stride_x = blockDim.x * gridDim.x;
     Idx stride_y = blockDim.y * gridDim.y;
-    Idx feat_idx = tx;
     Idx dst_vid = ty;
     Idx e_xlen = gdata.e_xlen;
     while (dst_vid < csr.row_offsets.length) {
         Idx start_off = *(csr.row_offsets.data + dst_vid);
         Idx end_off = *(csr.row_offsets.data + dst_vid + 1);
+        Idx feat_idx = tx;
         while (feat_idx < e_xlen) {
             // 1. Load dstnation vertex into shared memory
             Idx feat_off_dst = dst_vid * e_xlen + feat_idx;
-            er[threadIdx.x] = gdata.er[feat_off_dst];
-            __syncthreads();
+            //er[threadIdx.x] = gdata.er[feat_off_dst];
+            //__syncthreads();
             // 2. Do the computation
             DType sum = 0.;
             for (Idx eid=start_off; eid<end_off; ++eid) {
                 Idx src_id = *(csr.column_indices.data + eid);
                 Idx feat_off_src = src_id * e_xlen + feat_idx;
-                DType tmp = gatLeakyReluExp(gdata.el[feat_off_src] + er[threadIdx.x], gdata.leaky_relu_slope);
-                //DType tmp = gatLeakyReluExp(gdata.el[feat_off_src] + gdata.er[feat_off_dst], gdata.leaky_relu_slope);
+                //DType tmp = gatLeakyReluExp(gdata.el[feat_off_src] + er[threadIdx.x], gdata.leaky_relu_slope);
+                DType tmp = gatLeakyReluExp(gdata.el[feat_off_src] + gdata.er[feat_off_dst], gdata.leaky_relu_slope);
                 gdata.exp[Idx(eid * e_xlen) + feat_idx] = tmp;
                 sum += tmp;
             }
@@ -58,16 +58,16 @@ __global__ void gatExpLeakyReluSumKernel(GatFusedData<Idx, DType> gdata, minigun
 template <typename Idx, typename DType>
 __global__ void gatSumProdZipDivKernel(GatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
     Idx dst_vid = blockIdx.y;
-    Idx head_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    Idx feat_idx = threadIdx.y;
-    Idx stride_vid = blockDim.x * gridDim.x;
+    Idx stride_vid =  gridDim.y;
     Idx stride_head = blockDim.x * gridDim.x;
     Idx e_xlen = gdata.e_xlen;
     Idx hidden_xlen = gdata.feat_src_xlen/e_xlen;
-    while (dst_vid < csr.row_offsets.length) {
+    while (dst_vid < csr.row_offsets.length-1) {
         Idx start_off = *(csr.row_offsets.data + dst_vid);
         Idx end_off = *(csr.row_offsets.data + dst_vid + 1);
+        Idx head_idx = blockIdx.x * blockDim.x + threadIdx.x;
         while (head_idx < e_xlen) {
+            Idx feat_idx = threadIdx.y;
             while (feat_idx < hidden_xlen) {
                 DType s = 0.;
                 for (Idx eid=start_off; eid<end_off; eid++) {
@@ -207,7 +207,8 @@ void FusedGatKernelImpl(
         LOG(INFO) << "kernel1 blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
 
         //print_gdata<Idx, DType>(feat_src,el,er,sum,exp,ret,csr,el_xlen, feat_src_xlen);
-        gatExpLeakyReluSumKernel<<<nblks, nthrs, el_xlen*sizeof(DType), thr_entry->stream>>>(gdata, csr);
+        //gatExpLeakyReluSumKernel<<<nblks, nthrs, el_xlen*sizeof(DType), thr_entry->stream>>>(gdata, csr);
+        gatExpLeakyReluSumKernel<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, csr);
         //print_gdata<Idx, DType>(feat_src,el,er,sum,exp,ret,csr,el_xlen, feat_src_xlen);
 
         nthrs_x = utils::FindNumThreads(el_xlen, 64);
