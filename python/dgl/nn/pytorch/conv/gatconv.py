@@ -119,6 +119,7 @@ class GATConv(nn.Module):
             The output feature of shape :math:`(N, H, D_{out})` where :math:`H`
             is the number of heads, and :math:`D_{out}` is size of output feature.
         """
+        beg_t = time.time()
         graph = graph.local_var()
         if isinstance(feat, tuple):
             h_src = self.feat_drop(feat[0])
@@ -157,7 +158,6 @@ class GATConv(nn.Module):
         rst = graph.dstdata['ft']
         th.cuda.synchronize()
         end_t = time.time()
-        print("It takes ", end_t-start_t, " s to do dgl_gat")
         # residual
         if self.res_fc is not None:
             resval = self.res_fc(h_dst).view(h_dst.shape[0], -1, self._out_feats)
@@ -165,4 +165,7 @@ class GATConv(nn.Module):
         # activation
         if self.activation:
             rst = self.activation(rst)
+        th.cuda.synchronize()
+        final_t = time.time()
+        print("It takes ", end_t-start_t, " s to do fused_gat which takes ", (end_t-start_t)/(final_t-beg_t), " of total foward time")
         return rst

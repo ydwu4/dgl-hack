@@ -394,6 +394,7 @@ class FusedGat(th.autograd.Function):
         return ret
     @staticmethod
     def backward(ctx, gradout):
+        print(gradout.shape, gradout)
         feat_src, el, er, s, exp, ret, slope = ctx.backward_cache
         return None, None, None, None, None, None, None, None
 

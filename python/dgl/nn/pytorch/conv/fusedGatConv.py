@@ -90,7 +90,6 @@ class FusedGATConv(nn.Module):
             self.register_buffer('res_fc', None)
         self.reset_parameters()
         self.activation = activation
-        self.first_run = True
 
     def reset_parameters(self):
         """Reinitialize learnable parameters."""
@@ -124,6 +123,7 @@ class FusedGATConv(nn.Module):
             The output feature of shape :math:`(N, H, D_{out})` where :math:`H`
             is the number of heads, and :math:`D_{out}` is size of output feature.
         """
+        beg_t = time.time()
         graph = graph.local_var()
         if isinstance(feat, tuple):
             h_src = self.feat_drop(feat[0])
@@ -152,27 +152,6 @@ class FusedGATConv(nn.Module):
         rst = B.fused_gat(graph, feat_src, el, er, self.negative_slope)
         th.cuda.synchronize()
         end_t = time.time()
-        print("It takes ", end_t-start_t, " s to do fused_gat")
-
-        if self.first_run:
-            start_t = time.time()
-            graph.srcdata.update({'ft': feat_src, 'el': el})
-            graph.dstdata.update({'er': er})
-            # compute edge attention, el and er are a_l Wh_i and a_r Wh_j respectively.
-            graph.apply_edges(fn.u_add_v('el', 'er', 'e'))
-            e = self.leaky_relu(graph.edata.pop('e'))
-            # compute softmax
-            graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
-            # message passing
-            graph.update_all(fn.u_mul_e('ft', 'a', 'm'),
-                             fn.sum('m', 'ft'))
-            rst2 = graph.dstdata['ft']
-            th.cuda.synchronize()
-            end_t = time.time()
-            print("It takes ", end_t-start_t, " s to do dgl_gat")
-            print("rst2(gat) == rst(fusedgat)?", th.eq(rst, rst2))
-            self.first_run = False
-          
 
         # residual
         if self.res_fc is not None:
@@ -181,5 +160,8 @@ class FusedGATConv(nn.Module):
         # activation
         if self.activation:
             rst = self.activation(rst)
+        th.cuda.synchronize()
+        final_t = time.time()
+        print("It takes ", end_t-start_t, " s to do fused_gat which takes ", (end_t-start_t)/(final_t-beg_t), " of total foward time")
         return rst
 
