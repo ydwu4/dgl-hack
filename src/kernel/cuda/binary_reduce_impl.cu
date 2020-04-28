@@ -45,7 +45,7 @@ __global__ void gatExpLeakyReluSumKernel(GatFusedData<Idx, DType> gdata, minigun
                 Idx feat_off_src = src_id * e_xlen + feat_idx;
                 //DType tmp = gatLeakyReluExp(gdata.el[feat_off_src] + er[threadIdx.x], gdata.leaky_relu_slope);
                 DType tmp = gatLeakyReluExp(gdata.el[feat_off_src] + gdata.er[feat_off_dst], gdata.leaky_relu_slope);
-                gdata.exp[Idx(eid * e_xlen) + feat_idx] = tmp;
+                gdata.exp[Idx(gdata.eids[eid] * e_xlen) + feat_idx] = tmp;
                 sum += tmp;
             }
             gdata.sum[Idx(dst_vid*e_xlen) + feat_idx] = sum;
@@ -72,7 +72,7 @@ __global__ void gatSumProdZipDivKernel(GatFusedData<Idx, DType> gdata, minigun::
                 DType s = 0.;
                 for (Idx eid=start_off; eid<end_off; eid++) {
                     Idx src_vid = csr.column_indices.data[eid];
-                    s +=  gdata.exp[eid*e_xlen + head_idx] / gdata.sum[dst_vid*e_xlen + head_idx] 
+                    s +=  gdata.exp[gdata.eids[eid] * e_xlen + head_idx] / gdata.sum[dst_vid*e_xlen + head_idx] 
                                         * gdata.feat_src[src_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx];
                 }
                 gdata.ret[dst_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx] = s;
@@ -189,6 +189,7 @@ void FusedGatKernelImpl(
         gdata.ret_xlen = ret_len;
         auto incsr = graph.GetInCSRMatrix();
         minigun::Csr<Idx> csr = utils::CreateCsr<Idx>(incsr.indptr, incsr.indices);
+        gdata.eids = static_cast<Idx*>(incsr.data->data);
         // write a device function and call it from here
         //LOG(INFO) << "Within Fused Gat Kernel Impl." << "feat_src_dim:" << feat_src.GetSize()/sizeof(DType)/feat_src_xlen << "*" << feat_src_xlen 
         //    <<" el_dim:" << el.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen  << " ret_dim:" << ret.GetSize()/sizeof(DType)/ret_len <<"*" << ret_len

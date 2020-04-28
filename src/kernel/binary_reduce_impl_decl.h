@@ -57,6 +57,7 @@ struct GatFusedData {
   Idx ret_xlen{0};
   // num nodes
   Idx n{0};
+  Idx *eids;
   DType leaky_relu_slope;
   // Inputs
   DType *feat_src{nullptr}, *el{nullptr}, *er{nullptr};

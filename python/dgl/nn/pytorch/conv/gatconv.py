@@ -125,6 +125,7 @@ class GATConv(nn.Module):
             h_src = self.feat_drop(feat[0])
             h_dst = self.feat_drop(feat[1])
             feat_src = self.fc_src(h_src).view(-1, self._num_heads, self._out_feats)
+            h
             feat_dst = self.fc_dst(h_dst).view(-1, self._num_heads, self._out_feats)
         else:
             h_src = h_dst = self.feat_drop(feat)
@@ -167,5 +168,5 @@ class GATConv(nn.Module):
             rst = self.activation(rst)
         th.cuda.synchronize()
         final_t = time.time()
-        print("It takes ", end_t-start_t, " s to do fused_gat which takes ", (end_t-start_t)/(final_t-beg_t), " of total foward time")
+        print("It takes ", end_t-start_t, " s to do gat which takes ", (end_t-start_t)/(final_t-beg_t), " of total foward time")
         return rst
