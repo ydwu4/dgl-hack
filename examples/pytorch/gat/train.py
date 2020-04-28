@@ -16,6 +16,7 @@ import torch
 import torch.nn.functional as F
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
+from dgl import transform
 from gat import GAT, FusedGAT
 from utils import EarlyStopping
 
@@ -38,6 +39,7 @@ def evaluate(model, features, labels, mask):
 def main(args):
     # load and preprocess dataset
     data = load_data(args)
+    print(type(data))
     features = torch.FloatTensor(data.features)
     labels = torch.LongTensor(data.labels)
     if hasattr(torch, 'BoolTensor'):
@@ -75,9 +77,17 @@ def main(args):
 
     g = data.graph
     # add self loop
-    g.remove_edges_from(nx.selfloop_edges(g))
-    g = DGLGraph(g)
-    g.add_edges(g.nodes(), g.nodes())
+    print(type(g))
+    
+    if isinstance(g, nx.classes.digraph.DiGraph):
+        print('g is DiGraph')
+        g.remove_edges_from(nx.selfloop_edges(g))
+        g = DGLGraph(g)
+        g.add_edges(g.nodes(), g.nodes())
+    elif isinstance(g, DGLGraph):
+        print('g is DGLGraph')
+        g = transform.add_self_loop(g)
+
     n_edges = g.number_of_edges()
     # create model
     heads = ([args.num_heads] * args.num_layers) + [args.num_out_heads]
@@ -107,6 +117,7 @@ def main(args):
     # initialize graph
     dur = []
     for epoch in range(args.epochs):
+        print('epoch = ', epoch)
         model.train()
         if epoch >= 3:
             t0 = time.time()
