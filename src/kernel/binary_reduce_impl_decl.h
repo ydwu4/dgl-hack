@@ -67,6 +67,25 @@ struct GatFusedData {
   DType *ret{nullptr};
 };
 
+template <typename Idx, typename DType>
+struct BackwardGatFusedData {
+  // feat_size size along feature dimension
+  Idx feat_src_xlen{0};
+  Idx feat_src_hidden{0};
+  Idx e_xlen{0};
+  Idx ret_xlen{0};
+  // num nodes
+  Idx n{0};
+  Idx *eids;
+  DType leaky_relu_slope;
+  // Inputs
+  DType *feat_src{nullptr}, *el{nullptr}, *er{nullptr};
+  // Intermediates
+  DType  *sum{nullptr}, *exp{nullptr};
+  // Output
+  DType *grad_out{nullptr}, *grad_feat_src, *grad_el, *grad_er;
+};
+
 /*!
  * \brief Template declaration for BinaryReduce operator.
  *

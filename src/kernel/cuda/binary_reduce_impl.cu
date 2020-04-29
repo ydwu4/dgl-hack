@@ -84,6 +84,271 @@ __global__ void gatSumProdZipDivKernel(GatFusedData<Idx, DType> gdata, minigun::
     }
 }
 
+/*** Implement the logic of computing grad_feat_src.
+    feat_src is of dimension: N * num_heads * num_hidden
+    exp is of dimension: M * num_heads
+    sum is of dimension: N * num_heads
+    * means element-wise mutliplication
+    In forward computation: out = sum([feat_src[e.src] * exp[e.eid]/sum[curnode] for e in curnode.inedges]),
+    In backward computation: grad_feat_src[curnode] = sum([grad_out[e.dst] * exp[e.eid]/sum[e.dst] for e in curnode.outedges])
+***/
+template <typename Idx, typeaname DType>
+__global__ void fusedGatBackwardGradFeatSrc(BackwardGatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
+    Idx src_vid = blockIdx.y;
+    Idx stride_vid = gridDim.y;
+    Idx e_xlen = gdata.e_xlen;
+    Idx stride_head = blockDim.x * gridDim.x;
+    Idx hidden_xlen = gdata.feat_src_xlen/e_xlen;
+    while (src_vid < csr.row_offsets.length -1) {
+        Idx start_off = csr.row_offsets.data[src_vid];
+        Idx end_off = csr.row_offsets.data[src_vid+1];
+        Idx head_idx = blockIdx.x * blockDim.x  + threadIdx.x;
+        while (head_idx < e_xlen) {
+            Idx feat_idx = threadIdx.y;
+            while (feat_idx < hidden_xlen) {
+                DType s = 0.;
+                Idx src_offset = src_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx;
+                for (Idx e=start_off; e<end_off; ++e) {
+                    Idx eid = gdata.eids[e];
+                    Idx dst_id = csr.column_indices[e];
+                    // TODO: maybe it's better to cache exp/sum to reduce mem traffic as well as redundant computation?
+                    s += gdata.exp[eid*e_xlen + head_idx] / sum[dst_id*e_xlen + head_idx]
+                        * gdata.feat_src[src_offset];
+                }
+                gdata.grad_feat_src[src_offset] = s;
+                feat_idx += blockDim.y;
+            }
+            head_idx += stride_head;
+        }
+        src_vid += stride_vid;
+    }
+}
+/***
+Implement the logic of computing grad_el. 
+Dimension of grad_out: N * num_heads * num_hidden
+             grad_el:  N * num_heads
+             el:       N * num_heads
+             er:       N * num_heads
+             exp:      M * num_heads
+             sum:      N * num_heads
+             feat_src: N * num_heads * num_hidden 
+
+In forward computation: gdata.exp = [exp(leaky_relu(e.el[src] + e.el[dst])) for e in curnode.inedges]
+                        gdata.sum[curnode] = sum([exp[e.eid] for e in curnode.inedges])
+                        out[curnode] = sum([gdata.exp[e.eid] / gdata.sum[curnode] * gdata.feat_src[e.src] for e in curnode.inedges])
+In backward computation:
+                        grad_er = sum([grad_exp[e.eid] * leaky_relu(gdata.el[src]+ gdata.er[dst]) * grad_leaky_relu(gdata.el[src] + gdata.er[dst]) for e in curnode.inedges])
+                        grad_el = sum([grad_exp[e.eid] * leaky_relu(gdata.el[src] + gdata.er[dst]) * grad_leaky_relu(gdata.el[src] + gdata.er[dst]) for e in curnode.outedges])
+
+                        grad_exp = [grad_sum[e.dst] + grad_div[e.eid] * for e in outedges] (1)
+                        grad_sum = [-gradout[e.dst] * gdata.exp[e.eid] * gdata.feat_src[curnode] / (gdata.sum[dst]^2) for e in curnode.outedges] (2)
+                        grad_div = [gradout[e.dst] * gdata.feat_src[curnode] for e in curnode.outedges] (3)
+                        merge (1), (2) and (3), we have:
+
+                        grad_exp = [gradout[e.dst]  * gdata.feat_src[curnode] * gdata.exp[e.eid] / (-gdata.sum[dst]^2) 
+                                    +gradout[e.dst] * gdata.feat_src[curnode] / gdata.sum[dst] for e in outedges]
+***/
+template <typename DType>
+__device__ DType fusedLeakyMulGradLeaky(DType val, DType slope) {
+    return val > 0 ? val : val*slope; 
+}
+
+template <typename Idx, typeaname DType>
+__global__ void fusedGatBackwardGradElEr(BackwardGatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
+    Idx src_vid = blockIdx.y;
+    Idx stride_vid = gridDim.y;
+    Idx e_xlen = gdata.e_xlen;
+    Idx stride_head = blockDim.x * gridDim.x;
+    Idx hidden_xlen = gdata.feat_src_xlen/e_xlen;
+    while (src_vid < csr.row_offsets.length -1) {
+        Idx start_off = csr.row_offsets.data[src_vid];
+        Idx end_off = csr.row_offsets.data[src_vid+1];
+        Idx head_idx = blockIdx.x * blockDim.x  + threadIdx.x;
+        while (head_idx < e_xlen) {
+            Idx feat_idx = threadIdx.y;
+            while (feat_idx < hidden_xlen) {
+                DType s = 0.;
+                Idx feat_src_offset = src_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx;
+                for (Idx e=start_off; e<end_off; ++e) {
+                    Idx eid = gdata.eids[e];
+                    Idx dst_vid = csr.column_indices[e];
+                    DType grad_exp = gdata.gradout[dst_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx] * gdata.feat_src[feat_src_offset] 
+                        * ( gdata.exp[eid*e_xlen + head_idx] / powf(-gdata.sum[dst_vid*gdata.e_xlen + head_idx], 2) + 1/gdata.sum[dst_vid*gdata.e_xlen + head_idx]);
+                    DType tmp_sum = gdata.el[src_vid*e_xlen + head_idx] + gdata.er[dst_vid*e_xlen + head_idx];
+                    s += grad_exp * fusedLeakyMulGradLeaky(tmp_sum, gdata.slope);
+                    atomicAdd(gdata.grad_er[dst_vid*e_xlen + head_idx]);
+                }
+                atomicAdd(gdata.grad_el[src_vid*e_xlen + head_idx] , s);
+                feat_idx += blockDim.y;
+            }
+            head_idx += stride_head;
+        }
+        src_vid += stride_vid;
+    }
+}
+
+void FusedGatKernelImpl(
+    const CSRWrapper& graph,
+    runtime::NDArray feat_src,
+    runtime::NDArray el,
+    runtime::NDArray er,
+    runtime::NDArray sum,
+    runtime::NDArray exp,
+    runtime::NDArray ret,
+    float slope) {
+        typedef int32_t Idx;
+        typedef float DType;
+        const Idx MAX_NBLKS = 65535;
+        const Idx MAX_NTHRS = 1024;
+        // zero out ret, and packing feat_src, el, er, ret, graph together into one struct using raw float pointers
+        // get csr matrix
+        GatFusedData<Idx, DType> gdata;
+        int64_t el_xlen =  utils::ComputeXLength(el);
+        int64_t feat_src_xlen =  utils::ComputeXLength(feat_src);
+        int64_t ret_len =  utils::ComputeXLength(ret);
+        gdata.feat_src = static_cast<DType*>(feat_src->data);
+        gdata.el = static_cast<DType*>(el->data);
+        gdata.er = static_cast<DType*>(er->data);
+        gdata.sum = static_cast<DType*>(sum->data);
+        gdata.exp = static_cast<DType*>(exp->data);
+        gdata.ret = static_cast<DType*>(ret->data);
+        gdata.leaky_relu_slope = slope;
+        gdata.n = el.GetSize()/sizeof(DType)/el_xlen; 
+        gdata.e_xlen = el_xlen;
+        gdata.feat_src_xlen =  feat_src_xlen;
+        gdata.feat_src_hidden = feat_src_xlen/el_xlen;
+        gdata.ret_xlen = ret_len;
+        auto incsr = graph.GetInCSRMatrix();
+        minigun::Csr<Idx> csr = utils::CreateCsr<Idx>(incsr.indptr, incsr.indices);
+        gdata.eids = static_cast<Idx*>(incsr.data->data);
+        // write a device function and call it from here
+        //LOG(INFO) << "Within Fused Gat Kernel Impl." << "feat_src_dim:" << feat_src.GetSize()/sizeof(DType)/feat_src_xlen << "*" << feat_src_xlen 
+        //    <<" el_dim:" << el.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen  << " ret_dim:" << ret.GetSize()/sizeof(DType)/ret_len <<"*" << ret_len
+        //    <<" sum_dim:" << sum.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen
+        //    <<" exp_dim:" << exp.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen
+        //    << " graph csr row_offset length:" <<csr.row_offsets.length << " graph csr column indices length:" << csr.column_indices.length;
+
+        // Configure kernel launch parameters.
+        auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+        int nthrs_x = 32;
+        int nthrs_y = 1;
+        int nblks_x = (el_xlen + nthrs_x-1)/(nthrs_x);
+        int nblks_y = std::min(gdata.n, MAX_NBLKS);
+        const dim3 nblks(nblks_x, nblks_y);
+        const dim3 nthrs(nthrs_x, nthrs_y);
+        //LOG(INFO) << "kernel1 blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
+
+        //print_gdata<Idx, DType>(feat_src,el,er,sum,exp,ret,csr,el_xlen, feat_src_xlen);
+        //gatExpLeakyReluSumKernel<<<nblks, nthrs, el_xlen*sizeof(DType), thr_entry->stream>>>(gdata, csr);
+        gatExpLeakyReluSumKernel<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, csr);
+        //print_gdata<Idx, DType>(feat_src,el,er,sum,exp,ret,csr,el_xlen, feat_src_xlen);
+
+        nthrs_x = utils::FindNumThreads(el_xlen, 64);
+        nthrs_y = utils::FindNumThreads(gdata.feat_src_hidden, MAX_NTHRS/nthrs_x);
+        nblks_x = 1;
+        nblks_y = std::min(gdata.n, MAX_NBLKS);
+        const dim3 nthrs2(nthrs_x, nthrs_y);
+        const dim3 nblks2(nblks_x, nblks_y);
+        //LOG(INFO) << "kernel2 blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
+        gatSumProdZipDivKernel<<<nblks2, nthrs2, 0, thr_entry->stream>>>(gdata, csr);
+}
+
+void BackwardFusedGatKernelImpl(
+    const CSRWrapper& graph,
+    runtime::NDArray feat_src,
+    runtime::NDArray el,
+    runtime::NDArray er,
+    runtime::NDArray sum,
+    runtime::NDArray exp,
+    runtime::NDArray grad_out,
+    runtime::NDArray grad_el,
+    runtime::NDArray grad_er,
+    float slope) {
+        typedef int32_t Idx;
+        typedef float DType;
+        const Idx MAX_NBLKS = 65535;
+        const Idx MAX_NTHRS = 1024;
+        // zero out ret, and packing feat_src, el, er, ret, graph together into one struct using raw float pointers
+        // get csr matrix
+        BackwardGatFusedData<Idx, DType> gdata;
+        int64_t el_xlen =  utils::ComputeXLength(el);
+        int64_t feat_src_xlen =  utils::ComputeXLength(feat_src);
+        gdata.feat_src = static_cast<DType*>(feat_src->data);
+        gdata.el = static_cast<DType*>(el->data);
+        gdata.er = static_cast<DType*>(er->data);
+        gdata.sum = static_cast<DType*>(sum->data);
+        gdata.exp = static_cast<DType*>(exp->data);
+        gdata.grad_out= static_cast<DType*>(gard_out->data);
+        gdata.grad_el = static_cast<DType*>(grad_el->data);
+        gdata.grad_er = static_cast<DType*>(grad_er->data);
+        gdata.leaky_relu_slope = slope;
+        gdata.n = el.GetSize()/sizeof(DType)/el_xlen; 
+        gdata.e_xlen = el_xlen;
+        gdata.feat_src_xlen =  feat_src_xlen;
+        gdata.feat_src_hidden = feat_src_xlen/el_xlen;
+        auto incsr = graph.GetInCSRMatrix();
+        auto outcsr = graph.GetOutCSRMatrix();
+        minigun::Csr<Idx> icsr = utils::CreateCsr<Idx>(incsr.indptr, incsr.indices);
+        minigun::Csr<Idx> ocsr = utils::CreateCsr<Idx>(outcsr.indptr, outcsr.indices);
+        gdata.eids = static_cast<Idx*>(outcsr.data->data);
+        // write a device function and call it from here
+        //LOG(INFO) << "Within Fused Gat Kernel Impl." << "feat_src_dim:" << feat_src.GetSize()/sizeof(DType)/feat_src_xlen << "*" << feat_src_xlen 
+        //    <<" el_dim:" << el.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen  << " ret_dim:" << ret.GetSize()/sizeof(DType)/ret_len <<"*" << ret_len
+        //    <<" sum_dim:" << sum.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen
+        //    <<" exp_dim:" << exp.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen
+        //    << " graph csr row_offset length:" <<csr.row_offsets.length << " graph csr column indices length:" << csr.column_indices.length;
+
+        // Configure kernel launch parameters.
+        auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+        int nthrs_x = 32;
+        int nthrs_y = 1;
+        int nblks_x = (el_xlen + nthrs_x-1)/(nthrs_x);
+        int nblks_y = std::min(gdata.n, MAX_NBLKS);
+        const dim3 nblks(nblks_x, nblks_y);
+        const dim3 nthrs(nthrs_x, nthrs_y);
+}
+
+template void BinaryReduceImpl<kDLGPU>(
+    const std::string& reducer,
+    const std::string& op,
+    const CSRWrapper& graph,
+    binary_op::Target lhs, binary_op::Target rhs,
+    runtime::NDArray lhs_data, runtime::NDArray rhs_data,
+    runtime::NDArray out_data,
+    runtime::NDArray lhs_mapping, runtime::NDArray rhs_mapping,
+    runtime::NDArray out_mapping);
+
+template void BinaryReduceBcastImpl<kDLGPU>(
+    const BcastInfo& info,
+    const std::string& reducer,
+    const std::string& op,
+    const CSRWrapper& graph,
+    binary_op::Target lhs, binary_op::Target rhs,
+    runtime::NDArray lhs_data, runtime::NDArray rhs_data,
+    runtime::NDArray out_data,
+    runtime::NDArray lhs_mapping, runtime::NDArray rhs_mapping,
+    runtime::NDArray out_mapping);
+
+template void BackwardBinaryReduceImpl<kDLGPU>(
+    const std::string& reducer,
+    const std::string& op,
+    const CSRWrapper& graph,
+    binary_op::Target lhs, binary_op::Target rhs,
+    NDArray lhs_mapping, NDArray rhs_mapping, NDArray out_mapping,
+    NDArray lhs_data, NDArray rhs_data, NDArray out_data,
+    NDArray grad_out_data,
+    NDArray grad_lhs_data, NDArray grad_rhs_data);
+
+template void BackwardBinaryReduceBcastImpl<kDLGPU>(
+    const BcastInfo& info,
+    const std::string& reducer,
+    const std::string& op,
+    const CSRWrapper& graph,
+    binary_op::Target lhs_tgt, binary_op::Target rhs_tgt,
+    runtime::NDArray lhs_mapping, runtime::NDArray rhs_mapping, runtime::NDArray out_mapping,
+    runtime::NDArray lhs, runtime::NDArray rhs, runtime::NDArray out, runtime::NDArray grad_out,
+    runtime::NDArray grad_lhs, runtime::NDArray grad_rhs);
+
 template <typename Idx>
 std::string print_csr(const minigun::Csr<Idx>& csr) {
     Idx row_len = csr.row_offsets.length;
@@ -155,113 +420,6 @@ void print_gdata(runtime::NDArray feat_src,
         std::string str_ret = print_gdata2d<Idx, DType>(ret, csr.row_offsets.length-1, feat_src_xlen);
         LOG(INFO) << "csr " << str_csr << " feat_src "<< str_feat_src << " el "<< str_el << " er " << str_er << "exp " << str_exp << "sum " <<str_sum << " ret" << str_ret;
 }
-
-void FusedGatKernelImpl(
-    const CSRWrapper& graph,
-    runtime::NDArray feat_src,
-    runtime::NDArray el,
-    runtime::NDArray er,
-    runtime::NDArray sum,
-    runtime::NDArray exp,
-    runtime::NDArray ret,
-    float slope) {
-        typedef int32_t Idx;
-        typedef float DType;
-        const Idx MAX_NBLKS = 65535;
-        const Idx MAX_NTHRS = 1024;
-        // zero out ret, and packing feat_src, el, er, ret, graph together into one struct using raw float pointers
-        // get csr matrix
-        GatFusedData<Idx, DType> gdata;
-        int64_t el_xlen =  utils::ComputeXLength(el);
-        int64_t feat_src_xlen =  utils::ComputeXLength(feat_src);
-        int64_t ret_len =  utils::ComputeXLength(ret);
-        gdata.feat_src = static_cast<DType*>(feat_src->data);
-        gdata.el = static_cast<DType*>(el->data);
-        gdata.er = static_cast<DType*>(er->data);
-        gdata.sum = static_cast<DType*>(sum->data);
-        gdata.exp = static_cast<DType*>(exp->data);
-        gdata.ret = static_cast<DType*>(ret->data);
-        gdata.leaky_relu_slope = slope;
-        gdata.n = el.GetSize()/sizeof(DType)/el_xlen; 
-        gdata.e_xlen = el_xlen;
-        gdata.feat_src_xlen =  feat_src_xlen;
-        gdata.feat_src_hidden = feat_src_xlen/el_xlen;
-        gdata.ret_xlen = ret_len;
-        auto incsr = graph.GetInCSRMatrix();
-        minigun::Csr<Idx> csr = utils::CreateCsr<Idx>(incsr.indptr, incsr.indices);
-        gdata.eids = static_cast<Idx*>(incsr.data->data);
-        // write a device function and call it from here
-        //LOG(INFO) << "Within Fused Gat Kernel Impl." << "feat_src_dim:" << feat_src.GetSize()/sizeof(DType)/feat_src_xlen << "*" << feat_src_xlen 
-        //    <<" el_dim:" << el.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen  << " ret_dim:" << ret.GetSize()/sizeof(DType)/ret_len <<"*" << ret_len
-        //    <<" sum_dim:" << sum.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen
-        //    <<" exp_dim:" << exp.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen
-        //    << " graph csr row_offset length:" <<csr.row_offsets.length << " graph csr column indices length:" << csr.column_indices.length;
-
-        // Configure kernel launch parameters.
-        auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
-        int nthrs_x = 32;
-        int nthrs_y = 1;
-        int nblks_x = (el_xlen + nthrs_x-1)/(nthrs_x);
-        int nblks_y = std::min(gdata.n, MAX_NBLKS);
-        const dim3 nblks(nblks_x, nblks_y);
-        const dim3 nthrs(nthrs_x, nthrs_y);
-        //LOG(INFO) << "kernel1 blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
-
-        //print_gdata<Idx, DType>(feat_src,el,er,sum,exp,ret,csr,el_xlen, feat_src_xlen);
-        //gatExpLeakyReluSumKernel<<<nblks, nthrs, el_xlen*sizeof(DType), thr_entry->stream>>>(gdata, csr);
-        gatExpLeakyReluSumKernel<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, csr);
-        //print_gdata<Idx, DType>(feat_src,el,er,sum,exp,ret,csr,el_xlen, feat_src_xlen);
-
-        nthrs_x = utils::FindNumThreads(el_xlen, 64);
-        nthrs_y = utils::FindNumThreads(gdata.feat_src_hidden, MAX_NTHRS/nthrs_x);
-        nblks_x = 1;
-        nblks_y = std::min(gdata.n, MAX_NBLKS);
-        const dim3 nthrs2(nthrs_x, nthrs_y);
-        const dim3 nblks2(nblks_x, nblks_y);
-        //LOG(INFO) << "kernel2 blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
-        gatSumProdZipDivKernel<<<nblks2, nthrs2, 0, thr_entry->stream>>>(gdata, csr);
-    }
-
-template void BinaryReduceImpl<kDLGPU>(
-    const std::string& reducer,
-    const std::string& op,
-    const CSRWrapper& graph,
-    binary_op::Target lhs, binary_op::Target rhs,
-    runtime::NDArray lhs_data, runtime::NDArray rhs_data,
-    runtime::NDArray out_data,
-    runtime::NDArray lhs_mapping, runtime::NDArray rhs_mapping,
-    runtime::NDArray out_mapping);
-
-template void BinaryReduceBcastImpl<kDLGPU>(
-    const BcastInfo& info,
-    const std::string& reducer,
-    const std::string& op,
-    const CSRWrapper& graph,
-    binary_op::Target lhs, binary_op::Target rhs,
-    runtime::NDArray lhs_data, runtime::NDArray rhs_data,
-    runtime::NDArray out_data,
-    runtime::NDArray lhs_mapping, runtime::NDArray rhs_mapping,
-    runtime::NDArray out_mapping);
-
-template void BackwardBinaryReduceImpl<kDLGPU>(
-    const std::string& reducer,
-    const std::string& op,
-    const CSRWrapper& graph,
-    binary_op::Target lhs, binary_op::Target rhs,
-    NDArray lhs_mapping, NDArray rhs_mapping, NDArray out_mapping,
-    NDArray lhs_data, NDArray rhs_data, NDArray out_data,
-    NDArray grad_out_data,
-    NDArray grad_lhs_data, NDArray grad_rhs_data);
-
-template void BackwardBinaryReduceBcastImpl<kDLGPU>(
-    const BcastInfo& info,
-    const std::string& reducer,
-    const std::string& op,
-    const CSRWrapper& graph,
-    binary_op::Target lhs_tgt, binary_op::Target rhs_tgt,
-    runtime::NDArray lhs_mapping, runtime::NDArray rhs_mapping, runtime::NDArray out_mapping,
-    runtime::NDArray lhs, runtime::NDArray rhs, runtime::NDArray out, runtime::NDArray grad_out,
-    runtime::NDArray grad_lhs, runtime::NDArray grad_rhs);
 
 }  // namespace kernel
 }  // namespace dgl

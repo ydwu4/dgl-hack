@@ -389,14 +389,17 @@ class FusedGat(th.autograd.Function):
         s_nd = zerocopy_to_dgl_ndarray(s)
         exp_nd = zerocopy_to_dgl_ndarray(exp)
         ret_nd = zerocopy_to_dgl_ndarray(ret)
-        ctx.backward_cache = feat_src, el, er, s, exp, ret, slope
+        ctx.backward_cache = graph, feat_src, el, er, s, exp, ret, slope
         K.fused_gat_kernel(graph, feat_src_nd, el_nd, er_nd, s_nd, exp_nd, ret_nd, slope)
         return ret
     @staticmethod
     def backward(ctx, gradout):
         print(gradout.shape, gradout)
-        feat_src, el, er, s, exp, ret, slope = ctx.backward_cache
-        return None, None, None, None, None, None, None, None
+        graph, feat_src, el, er, s, exp, ret, slope = ctx.backward_cache
+        grad_el = el.new_empty()
+        grad_er = el.new_empty()
+        grad_feat_src = feat_src.new_empty()
+        return None, grad_feat_src, grad_el, grad_er, None, None, None, None
 
 def fused_gat(graph, feat_src, el, er, slope):
     g = graph._graph.get_immutable_gidx(utils.to_dgl_context(context(feat_src)))
