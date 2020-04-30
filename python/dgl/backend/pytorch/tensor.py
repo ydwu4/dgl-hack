@@ -389,16 +389,27 @@ class FusedGat(th.autograd.Function):
         s_nd = zerocopy_to_dgl_ndarray(s)
         exp_nd = zerocopy_to_dgl_ndarray(exp)
         ret_nd = zerocopy_to_dgl_ndarray(ret)
-        ctx.backward_cache = graph, feat_src, el, er, s, exp, ret, slope
+        ctx.backward_cache = graph, feat_src, el, er, s, exp, slope
         K.fused_gat_kernel(graph, feat_src_nd, el_nd, er_nd, s_nd, exp_nd, ret_nd, slope)
         return ret
     @staticmethod
     def backward(ctx, gradout):
         print(gradout.shape, gradout)
-        graph, feat_src, el, er, s, exp, ret, slope = ctx.backward_cache
-        grad_el = el.new_empty()
-        grad_er = el.new_empty()
-        grad_feat_src = feat_src.new_empty()
+        graph, feat_src, el, er, s, exp, slope = ctx.backward_cache
+        grad_el = th.zeros_like(el)
+        grad_er = th.zeros_like(er)
+        grad_feat_src = th.zeros_like(feat_src)
+
+        feat_src_nd = zerocopy_to_dgl_ndarray(feat_src)
+        el_nd = zerocopy_to_dgl_ndarray(el)
+        er_nd = zerocopy_to_dgl_ndarray(er)
+        s_nd = zerocopy_to_dgl_ndarray(s)
+        exp_nd = zerocopy_to_dgl_ndarray(exp)
+        grad_out_nd = zerocopy_to_dgl_ndarray(gradout)
+        grad_feat_src_nd = zerocopy_to_dgl_ndarray(grad_feat_src)
+        grad_el_nd = zerocopy_to_dgl_ndarray(grad_el)
+        grad_er_nd = zerocopy_to_dgl_ndarray(grad_er)
+        K.backward_fused_gat(graph, feat_src_nd, el_nd, er_nd, s_nd, exp_nd, grad_out_nd, grad_feat_src_nd, grad_el_nd, grad_er_nd, slope)
         return None, grad_feat_src, grad_el, grad_er, None, None, None, None
 
 def fused_gat(graph, feat_src, el, er, slope):

@@ -15,6 +15,23 @@ using dgl::runtime::NDArray;
 namespace dgl {
 namespace kernel {
 
+template <typename Idx>
+std::string print_csr(const minigun::Csr<Idx>& csr);
+
+template <typename Idx, typename DType>
+std::string print_gdata2d(runtime::NDArray a, Idx dim1, Idx dim2);
+
+template <typename Idx, typename DType>
+void print_gdata(runtime::NDArray feat_src,
+    runtime::NDArray el,
+    runtime::NDArray er,
+    runtime::NDArray sum,
+    runtime::NDArray exp,
+    runtime::NDArray ret,
+    const minigun::Csr<Idx> &csr,
+    Idx el_xlen,
+    Idx feat_src_xlen);
+
 template <typename DType>
 __device__ DType gatLeakyReluExp(DType val, DType slope) {
     return val > 0 ? exp(val) : exp(slope * val);
@@ -92,7 +109,7 @@ __global__ void gatSumProdZipDivKernel(GatFusedData<Idx, DType> gdata, minigun::
     In forward computation: out = sum([feat_src[e.src] * exp[e.eid]/sum[curnode] for e in curnode.inedges]),
     In backward computation: grad_feat_src[curnode] = sum([grad_out[e.dst] * exp[e.eid]/sum[e.dst] for e in curnode.outedges])
 ***/
-template <typename Idx, typeaname DType>
+template <typename Idx, typename DType>
 __global__ void fusedGatBackwardGradFeatSrc(BackwardGatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
     Idx src_vid = blockIdx.y;
     Idx stride_vid = gridDim.y;
@@ -107,15 +124,14 @@ __global__ void fusedGatBackwardGradFeatSrc(BackwardGatFusedData<Idx, DType> gda
             Idx feat_idx = threadIdx.y;
             while (feat_idx < hidden_xlen) {
                 DType s = 0.;
-                Idx src_offset = src_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx;
                 for (Idx e=start_off; e<end_off; ++e) {
                     Idx eid = gdata.eids[e];
-                    Idx dst_id = csr.column_indices[e];
+                    Idx dst_id = csr.column_indices.data[e];
                     // TODO: maybe it's better to cache exp/sum to reduce mem traffic as well as redundant computation?
-                    s += gdata.exp[eid*e_xlen + head_idx] / sum[dst_id*e_xlen + head_idx]
-                        * gdata.feat_src[src_offset];
+                    s += gdata.exp[eid*e_xlen + head_idx] / gdata.sum[dst_id*e_xlen + head_idx]
+                        * gdata.grad_out[dst_id*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx];
                 }
-                gdata.grad_feat_src[src_offset] = s;
+                gdata.grad_feat_src[src_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx] = s;
                 feat_idx += blockDim.y;
             }
             head_idx += stride_head;
@@ -127,6 +143,7 @@ __global__ void fusedGatBackwardGradFeatSrc(BackwardGatFusedData<Idx, DType> gda
 Implement the logic of computing grad_el. 
 Dimension of grad_out: N * num_heads * num_hidden
              grad_el:  N * num_heads
+             grad_er:  N * num_heads
              el:       N * num_heads
              er:       N * num_heads
              exp:      M * num_heads
@@ -137,23 +154,17 @@ In forward computation: gdata.exp = [exp(leaky_relu(e.el[src] + e.el[dst])) for 
                         gdata.sum[curnode] = sum([exp[e.eid] for e in curnode.inedges])
                         out[curnode] = sum([gdata.exp[e.eid] / gdata.sum[curnode] * gdata.feat_src[e.src] for e in curnode.inedges])
 In backward computation:
-                        grad_er = sum([grad_exp[e.eid] * leaky_relu(gdata.el[src]+ gdata.er[dst]) * grad_leaky_relu(gdata.el[src] + gdata.er[dst]) for e in curnode.inedges])
+                        grad_er = sum([grad_exp[e.eid] * exp(leaky_relu(gdata.el[src]+ gdata.er[dst])) * grad_leaky_relu(gdata.el[src] + gdata.er[dst]) for e in curnode.inedges])
                         grad_el = sum([grad_exp[e.eid] * leaky_relu(gdata.el[src] + gdata.er[dst]) * grad_leaky_relu(gdata.el[src] + gdata.er[dst]) for e in curnode.outedges])
 
-                        grad_exp = [grad_sum[e.dst] + grad_div[e.eid] * for e in outedges] (1)
-                        grad_sum = [-gradout[e.dst] * gdata.exp[e.eid] * gdata.feat_src[curnode] / (gdata.sum[dst]^2) for e in curnode.outedges] (2)
-                        grad_div = [gradout[e.dst] * gdata.feat_src[curnode] for e in curnode.outedges] (3)
-                        merge (1), (2) and (3), we have:
-
-                        grad_exp = [gradout[e.dst]  * gdata.feat_src[curnode] * gdata.exp[e.eid] / (-gdata.sum[dst]^2) 
-                                    +gradout[e.dst] * gdata.feat_src[curnode] / gdata.sum[dst] for e in outedges]
+                        grad_exp = [(grad_sum[e.dst]-exp[eid])/grad_sum[e.dst]^2 * gdata.feat_src[e.src]) for e in outedges]
 ***/
 template <typename DType>
-__device__ DType fusedLeakyMulGradLeaky(DType val, DType slope) {
-    return val > 0 ? val : val*slope; 
+__device__ DType gradLeaky(DType val, DType slope) {
+    return val > 0 ? 1 : slope;
 }
 
-template <typename Idx, typeaname DType>
+template <typename Idx, typename DType>
 __global__ void fusedGatBackwardGradElEr(BackwardGatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
     Idx src_vid = blockIdx.y;
     Idx stride_vid = gridDim.y;
@@ -171,14 +182,15 @@ __global__ void fusedGatBackwardGradElEr(BackwardGatFusedData<Idx, DType> gdata,
                 Idx feat_src_offset = src_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx;
                 for (Idx e=start_off; e<end_off; ++e) {
                     Idx eid = gdata.eids[e];
-                    Idx dst_vid = csr.column_indices[e];
-                    DType grad_exp = gdata.gradout[dst_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx] * gdata.feat_src[feat_src_offset] 
-                        * ( gdata.exp[eid*e_xlen + head_idx] / powf(-gdata.sum[dst_vid*gdata.e_xlen + head_idx], 2) + 1/gdata.sum[dst_vid*gdata.e_xlen + head_idx]);
+                    Idx dst_vid = csr.column_indices.data[e];
+                    DType grad_exp = gdata.grad_out[dst_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx] * gdata.feat_src[feat_src_offset]
+                                  * ((gdata.sum[dst_vid*gdata.e_xlen + head_idx] - gdata.exp[eid*e_xlen + head_idx]) / powf(gdata.sum[dst_vid*gdata.e_xlen + head_idx], 2));
                     DType tmp_sum = gdata.el[src_vid*e_xlen + head_idx] + gdata.er[dst_vid*e_xlen + head_idx];
-                    s += grad_exp * fusedLeakyMulGradLeaky(tmp_sum, gdata.slope);
-                    atomicAdd(gdata.grad_er[dst_vid*e_xlen + head_idx]);
+                    DType tmp2 = grad_exp * gdata.exp[eid*e_xlen + head_idx] * gradLeaky(tmp_sum, gdata.leaky_relu_slope);
+                    s += tmp2;
+                    atomicAdd(gdata.grad_er + (dst_vid*e_xlen + head_idx), tmp2);
                 }
-                atomicAdd(gdata.grad_el[src_vid*e_xlen + head_idx] , s);
+                atomicAdd(gdata.grad_el + (src_vid*e_xlen + head_idx) , s);
                 feat_idx += blockDim.y;
             }
             head_idx += stride_head;
@@ -261,6 +273,7 @@ void BackwardFusedGatKernelImpl(
     runtime::NDArray sum,
     runtime::NDArray exp,
     runtime::NDArray grad_out,
+    runtime::NDArray grad_feat_src,
     runtime::NDArray grad_el,
     runtime::NDArray grad_er,
     float slope) {
@@ -278,7 +291,8 @@ void BackwardFusedGatKernelImpl(
         gdata.er = static_cast<DType*>(er->data);
         gdata.sum = static_cast<DType*>(sum->data);
         gdata.exp = static_cast<DType*>(exp->data);
-        gdata.grad_out= static_cast<DType*>(gard_out->data);
+        gdata.grad_out= static_cast<DType*>(grad_out->data);
+        gdata.grad_feat_src = static_cast<DType*>(grad_feat_src->data);
         gdata.grad_el = static_cast<DType*>(grad_el->data);
         gdata.grad_er = static_cast<DType*>(grad_er->data);
         gdata.leaky_relu_slope = slope;
@@ -286,9 +300,7 @@ void BackwardFusedGatKernelImpl(
         gdata.e_xlen = el_xlen;
         gdata.feat_src_xlen =  feat_src_xlen;
         gdata.feat_src_hidden = feat_src_xlen/el_xlen;
-        auto incsr = graph.GetInCSRMatrix();
         auto outcsr = graph.GetOutCSRMatrix();
-        minigun::Csr<Idx> icsr = utils::CreateCsr<Idx>(incsr.indptr, incsr.indices);
         minigun::Csr<Idx> ocsr = utils::CreateCsr<Idx>(outcsr.indptr, outcsr.indices);
         gdata.eids = static_cast<Idx*>(outcsr.data->data);
         // write a device function and call it from here
@@ -297,16 +309,20 @@ void BackwardFusedGatKernelImpl(
         //    <<" sum_dim:" << sum.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen
         //    <<" exp_dim:" << exp.GetSize()/sizeof(DType)/el_xlen << "*" << el_xlen
         //    << " graph csr row_offset length:" <<csr.row_offsets.length << " graph csr column indices length:" << csr.column_indices.length;
-
+        print_gdata<Idx, DType>(feat_src,el,er,sum,exp,grad_out,ocsr,el_xlen, feat_src_xlen);
         // Configure kernel launch parameters.
         auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
-        int nthrs_x = 32;
-        int nthrs_y = 1;
-        int nblks_x = (el_xlen + nthrs_x-1)/(nthrs_x);
+        int nthrs_x = utils::FindNumThreads(el_xlen, 64);
+        int nthrs_y = utils::FindNumThreads(gdata.feat_src_hidden, MAX_NTHRS/nthrs_x);
+        int nblks_x = 1;
         int nblks_y = std::min(gdata.n, MAX_NBLKS);
-        const dim3 nblks(nblks_x, nblks_y);
         const dim3 nthrs(nthrs_x, nthrs_y);
+        const dim3 nblks(nblks_x, nblks_y);
+        LOG(INFO) << "GradFeatSrc kernel blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
+        fusedGatBackwardGradFeatSrc<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, ocsr);
+        fusedGatBackwardGradElEr<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, ocsr);
 }
+
 
 template void BinaryReduceImpl<kDLGPU>(
     const std::string& reducer,

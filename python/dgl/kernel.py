@@ -150,6 +150,9 @@ def binary_op_reduce(reducer, op, G, A_target, B_target, A, B, out,
 def fused_gat_kernel(graph, feat_src, el, er, s, exp, ret, slope):
     _CAPI_DGLFusedGatKernel(graph, feat_src, el, er, s, exp, ret, slope)
 
+def backward_fused_gat(graph, feat_src, el, er, s, exp, grad_out, grad_feat_src, grad_el, grad_er, slope):
+    _CAPI_DGLKernelBackwardFusedGat(graph, feat_src, el, er, s, exp, grad_out, grad_feat_src, grad_el, grad_er, slope)
+
 # pylint: disable=invalid-name
 def backward_lhs_binary_op_reduce(
         reducer, op, G,

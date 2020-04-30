@@ -83,7 +83,7 @@ struct BackwardGatFusedData {
   // Intermediates
   DType  *sum{nullptr}, *exp{nullptr};
   // Output
-  DType *grad_out{nullptr}, *grad_feat_src, *grad_el, *grad_er;
+  DType *grad_out{nullptr}, *grad_feat_src{nullptr}, *grad_el{nullptr}, *grad_er{nullptr};
 };
 
 /*!
@@ -153,6 +153,19 @@ void FusedGatKernelImpl(
     runtime::NDArray feat_src, runtime::NDArray el, runtime::NDArray er, 
     runtime::NDArray sum, runtime::NDArray exp,
     runtime::NDArray ret, float leaky_relu_slope);
+
+void BackwardFusedGatKernelImpl(
+    const CSRWrapper& graph,
+    runtime::NDArray feat_src,
+    runtime::NDArray el,
+    runtime::NDArray er,
+    runtime::NDArray sum,
+    runtime::NDArray exp,
+    runtime::NDArray grad_out,
+    runtime::NDArray grad_feat_src,
+    runtime::NDArray grad_el,
+    runtime::NDArray grad_er,
+    float slope);
 
 
 ///////////////////////////////////////////////////////////////////////////////
