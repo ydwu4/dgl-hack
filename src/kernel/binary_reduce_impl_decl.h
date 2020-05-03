@@ -80,8 +80,7 @@ struct BackwardGatFusedData {
   DType leaky_relu_slope;
   // Inputs
   DType *feat_src{nullptr}, *el{nullptr}, *er{nullptr};
-  // Intermediates
-  DType  *sum{nullptr}, *exp{nullptr};
+  DType *sum{nullptr}, *exp{nullptr}, *ret{nullptr};
   // Output
   DType *grad_out{nullptr}, *grad_feat_src{nullptr}, *grad_el{nullptr}, *grad_er{nullptr};
 };
@@ -161,6 +160,7 @@ void BackwardFusedGatKernelImpl(
     runtime::NDArray er,
     runtime::NDArray sum,
     runtime::NDArray exp,
+    runtime::NDArray ret,
     runtime::NDArray grad_out,
     runtime::NDArray grad_feat_src,
     runtime::NDArray grad_el,

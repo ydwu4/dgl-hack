@@ -483,14 +483,15 @@ DGL_REGISTER_GLOBAL("kernel._CAPI_DGLKernelBackwardFusedGat")
     NDArray er = args[3];
     NDArray sum = args[4];
     NDArray exp = args[5];
-    NDArray grad_out = args[6];
-    NDArray grad_feat_src = args[7];
-    NDArray grad_el = args[8];
-    NDArray grad_er = args[9];
-    float slope = double(args[10]);
+    NDArray ret = args[6];
+    NDArray grad_out = args[7];
+    NDArray grad_feat_src = args[8];
+    NDArray grad_el = args[9];
+    NDArray grad_er = args[10];
+    float slope = double(args[11]);
     const auto& ctx = wrapper.Context();
     CheckCtx(ctx, {feat_src, el, er, sum, exp, grad_out, grad_feat_src, grad_el, grad_er}, {"feat_src", "el", "er", "sum", "exp", "grad_out", "grad_feat_src", "grad_el", "grad_er"});
-    BackwardFusedGatKernelImpl(wrapper, feat_src, el, er, sum, exp, grad_out, grad_feat_src, grad_el, grad_er, slope);
+    BackwardFusedGatKernelImpl(wrapper, feat_src, el, er, sum, exp, ret, grad_out, grad_feat_src, grad_el, grad_er, slope);
 });
 
 void BackwardRhsBinaryOpReduce(

@@ -17,13 +17,13 @@ def main(args):
     
     g = dgl.DGLGraph()
     g.add_nodes(NUM_NODES)
-    g.add_edges(0, [i for i in range(NUM_NODES)])
-    g.add_edges(1, [i for i in range(NUM_NODES)])
-    feat_src = th.ones((NUM_NODES, NUM_HEADS, NUM_HIDDEN))
+    g.add_edges([i for i in range(NUM_NODES)], 0)
+    g.add_edges([i for i in range(NUM_NODES)], 1)
+    feat_src = th.rand((NUM_NODES, NUM_HEADS, NUM_HIDDEN))
     feat_src.requires_grad = True
-    el = th.ones((NUM_NODES, NUM_HEADS, 1))
+    el = th.rand((NUM_NODES, NUM_HEADS, 1))
     el.requires_grad = True
-    er = th.ones((NUM_NODES, NUM_HEADS, 1))
+    er = th.rand((NUM_NODES, NUM_HEADS, 1))
     er.requires_grad = True
     
     feat_src = feat_src.cuda()
@@ -40,9 +40,9 @@ def main(args):
         e = leaky_relu(g.edata.pop('e'))
         g.edata['out'] = th.exp(e)
         g.update_all(fn.copy_e('out', 'm'), fn.sum('m', 'out_sum'))
-        g.apply_edges(fn.e_div_v('out', 'out_sum', 'out'))
+        g.apply_edges(fn.e_div_v('out', 'out_sum', 'out1'))
         # Omit attn_drop for deterministic execution
-        g.edata['a'] = (g.edata['out'])
+        g.edata['a'] = g.edata['out1']
         # message passing
         g.update_all(fn.u_mul_e('ft', 'a', 'm'),
                          fn.sum('m', 'ft'))
@@ -52,7 +52,7 @@ def main(args):
     r1 = expected_output()
     r2 = B.fused_gat(g, feat_src, el, er, negative_slope)
     print('expected ret', r1, 'gatfused ret', r2, " close enough?", th.allclose(r1, r2))
-    grad_out = th.ones_like(r1)
+    grad_out = th.rand_like(r1)
     #grad_feat_src1 = grad(outputs=r1, inputs=feat_src, grad_outputs=grad_out, retain_graph=True)
     #grad_feat_src2 = grad(outputs=r2, inputs=feat_src, grad_outputs=grad_out, retain_graph=True)
     #print('expected grad_feat_src', grad_feat_src1, 'gatfused grad_feat_src', grad_feat_src2[0], 'close enough?',
@@ -62,11 +62,17 @@ def main(args):
     grad_el2 = grad(outputs=r2, inputs=el, grad_outputs=grad_out, retain_graph=True)
     print('expected grad_el', grad_el1[0], '\ngatfused grad_el', grad_el2[0], 'close enough?',
             th.allclose(grad_el1[0], grad_el2[0]))
+    #grad_a = grad(outputs=r1, inputs=g.edata['a'], grad_outputs=grad_out, retain_graph=True)
+    #grad_exp = grad(outputs=r1, inputs=g.edata['out'], grad_outputs=grad_out, retain_graph=True)
+    #grad_sum= grad(outputs=r1, inputs=g.ndata['out_sum'], grad_outputs=grad_out, retain_graph=True)
+    #print('grad_a', grad_a)
+    #print('grad_exp', grad_exp)
+    #print('grad_sum', grad_sum)
 
-    #grad_er1 = grad(outputs=r1, inputs=er, grad_outputs=grad_out, retain_graph=True)
-    #grad_er2 = grad(outputs=r2, inputs=er, grad_outputs=grad_out, retain_graph=True)
-    #print('expected grad_er', grad_er1[0], 'gatfused grad_er', grad_er2[0], 'close enough?',
-    #        th.allclose(grad_er1[0], grad_er2[0]))
+    grad_er1 = grad(outputs=r1, inputs=er, grad_outputs=grad_out, retain_graph=True)
+    grad_er2 = grad(outputs=r2, inputs=er, grad_outputs=grad_out, retain_graph=True)
+    print('expected grad_er', grad_er1[0], 'gatfused grad_er', grad_er2[0], 'close enough?',
+            th.allclose(grad_er1[0], grad_er2[0]))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='fusedGatUnitTest')

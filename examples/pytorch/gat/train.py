@@ -126,7 +126,12 @@ def main(args):
         loss = loss_fcn(logits[train_mask], labels[train_mask])
 
         optimizer.zero_grad()
+        torch.cuda.synchronize()
+        t1 =time.time()
         loss.backward()
+        torch.cuda.synchronize()
+        t2 =time.time()
+        print(t2 - t1, 's')
         optimizer.step()
 
         if epoch >= 3:
