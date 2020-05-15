@@ -7,14 +7,14 @@ DGL (and all existing GNN systems) adopt a *dataflow-centric* programming model 
 
 To understand the problem of *high comprehension burden*, we consider a simple operation from an existing GNN model DGMG which concates for each edge the src node's feature, edge's feature and dst node's feature together. We attribute this burden to the *dataflow-centric* programming model where users are forced to program using node and edge feature *tensor*.
 
-The problem of *low computation and memory efficiency* is also due to *dataflow-centric* programming model. To conduct message propogation in this model, some systems(PyG, NeuGraph) use simple edge materialization to prepare for edge-wise computation then aggregation. Specifically, the scatter operation copies from the original node feature tnesor into an new tensor according to the outgoing edges incident to this node. Then edge-wise operations are performed on this new tensor. This creates huge amount of intermediate results whose sizes are proportional to the number of edges. DGL takes one step further, it provides built-in functions such as copyFromSrc and sumByDst as arguments of an operator updateAll. The system can automatically fuse these two operations into one operation thus saving both momeory usage and traffic. However this approach is not perfect as the graph computation is a seperate operator from the rest the data-flow programming model prohibiting further holistic optimizations.
+The problem of *low computation and memory efficiency* is also due to *dataflow-centric* programming model. To conduct message propogation in this model, some systems(PyG, NeuGraph) use simple edge materialization to prepare for edge-wise computation then aggregation. Specifically, the scatter operation copies from the original node feature tnesor into an new tensor according to the outgoing edges incident to this node. Then edge-wise operations are performed on this new tensor. This creates huge amount of intermediate results whose sizes are proportional to the number of edges. DGL takes one step further, it provides built-in functions such as copyFromSrc and sumByDst as arguments of an operator updateAll. The system can automatically fuse these two operations into one operation thus saving both momeory usage and traffic. However this approach is not perfect as the graph computation is a seperate operator from the rest the data-flow programming model prohibiting further *holistic optimizations*.
 
 ## Design
 ### Programming model 
 The basic idea is that we factor out the node dimension and let user focuse on the computation patterns around a vertex's neighborhood. Such a design is possible based on the fact (or assumption?) that 1. different nodes share the common set of model parameters 2. operators usually apply on feature dimension and repeat across the node (in other words: batch) dimension. Therefore the same deep learning model is still valid (in the sense that the shape of tensors flowing through operator chains remains coherent) even if we factor out node dimension (0-th dimension). This factoriation may appear uesless for traditional DL models such as CNN but can be critical for GNN in terms of lowering the comprehension burden.
 
-We use GATConv as an illustration. 
-TODO: 1. Add more examples e.g. SageConv, GCNConv, ChebConv, AGNNConv, GeomGCN, RGCN.
+We use GATConv as an illustration: 
+TODO: 1. Add more examples e.g. GeomGCN, SageConv, GCNConv, ChebConv, AGNNConv, RGCN.
       2. Add examples that use conditionals, for loops, heterogeneous edges.
 ```python
 def forward(self, graph, nfeat):
@@ -27,13 +27,14 @@ def forward(self, graph, nfeat):
         feat_src = [self.fc(self.feat_drop(n.nfeat)).view(self.num_heads, self.out_feats) for n in v.innbs]
         el = [ f * self.attn_l.sum(dim=-1) for f in feat_src]
         er = self.fc(self.feat_drop(v.nfeat)).view(self.num_heads, self.out_feats) * self.attn_r.sum(dim=-1)
-        coeff = [self.leaky_relu(th.exp(l + er)) for l in el]
+        coeff = [th.exp(self.leaky_relu(l + er)) for l in el]
         s = sum(coeff)
         alpha = [c/s for c in coeff]
         rst = sum([ef[0]*ef[1] for ef in zip(alpha, feat_src)])
     # Global scope. Users are allowed to do any post-transformations after zoomIn.
     return zoomOut(rst)
 ```
+
 
 ### Front End
 The objetive of front end is to construct an intermediate representation in c++ space according to the python programs written in local scope. This representation must 1. precisely describe what need to be done 2. can support auto-differentitation, operator fusion, memory planning and code generations.
@@ -102,9 +103,9 @@ graph(%num_heads: Int,
     %er : v::Unknown = node::sum(%9, dim=%10) 
 
     # coeff = [self.leaky_relu(th.exp(l + er)) for l in el] 
-    %11 : e::Unknown = edge::sum(%el, %er)
-    %12 : e::Unknown = edge::exp(%11)
-    %coeff: e::Unknown = edge::leaky_relu(%12)
+    %11 : e::Unknown = edge::add(%el, %er)
+    %12 : e::Unknown = edge::leaky_relu(%11)
+    %coeff: e::Unknown = edge::exp(%12)
 
     # s = sum(coeff) 
     %s : v::Unknown = agg::sum(%coeff)
@@ -124,15 +125,6 @@ Simple rules to determine a variable scope:
 2. The return value of a function which takes one or more variables of the same scope will be the same type scope;
 3. A function which takes different type scope will be in edge scope its return value is edge scope. e.g. edge::sum(%el, %er);
 4. agg scope functions accepts edge scope variables and returns node scope variables.
-
-#### Auto-differentiation
-Where to put the auto-differentiation steps? Before or after operation batching?
-
-In this pass, we'll generate the backward propagation graphs. We need to first figure out which ParamTensor requires gradient and which variable in zoomIn() are used after the context is closed.
-
-To know which variables are used and may have gradients, we create an autograd function zoomOut(), which takes the symbolic varialbe used whithin zoomIn() context and returns the associated tensors.
-
-In GAT, rst is used and has gradient gradOut which is of same dimension as rst. The requires grad part
 
 #### Operation Batching 
 The purporse for this step is to transform the local node-centric operations to graph-level operations. The reason is that code for node-centric IR has extremely low efficiency due to redundant computations and many smalll kernel launches.
@@ -165,9 +157,9 @@ graph(%num_heads: Int,
     %er : n::Unknown = node::sum(%9, dim=%10) 
 
     # coeff = [self.leaky_relu(th.exp(l + er)) for l in el] 
-    %11 : e::Unknown = edge::sum(%er, %el)
-    %12 : e::Unknown = edge::exp(%11)
-    %coeff: e::Unknown = edge::leaky_relu(%12)
+    %11 : e::Unknown = edge::add(%er, %el)
+    %12 : e::Unknown = edge::leaky_relu(%11)
+    %coeff: e::Unknown = edge::exp(%12)
 
     # s = sum(coeff) 
     %s : n::Unknown = agg::sum(%coeff)
@@ -180,12 +172,12 @@ graph(%num_heads: Int,
     %15 : e::Unknown = edge::mul(%13, %14)
     %rst : n::Unknown = agg::sum(%15)
 ```
-TODO: How to prove it's correct? Is there any corner cases that may break after this step?
-
-Up until now, we have created an IR for the original program that's ready for optimiation and code generation.
+**TODO: How to prove it's correct? Will this step break some semantic in forward or backward computation?**
+For forward computation:
+Not breaking the semantic of forward computation means that both program *can* produce the same result. We only need to prove that batching produces a superset of results. To see this, we can show that inbbs and v are both subsets of node scope feature tensor therefore operations conducted on each individual nodes will not create results beyond the results computed based on all nodes. 
 
 ### Back End
-The objective of the backend is to apply various transformations to the global-level representation generated by front end, which include auto-differentiation, operator fusion, memory planning etc then conduct code generation.
+Up until now, we have created an IR for the original program that's ready for optimiation and code generation. The objective of the backend is to apply various transformations to the global-level representation generated by front end, which include auto-differentiation, operator fusion, memory planning etc then conduct code generation.
 
 #### Common Subexpression Elimination (CSE)
 The Operation Batching step may create duplicated sub-expressions. This naturally lead us to CSE. We show the expected result of this pass:
@@ -211,33 +203,183 @@ graph(%num_heads: Int,
     %er : n::Unknown = node::sum(%5, dim=%4) 
 
     # coeff = [self.leaky_relu(th.exp(l + er)) for l in el] 
-    %6 : e::Unknown = edge::sum(%er, %el)
-    %7: e::Unknown = edge::exp(%6)
-    %coeff: e::Unknown = edge::leaky_relu(%7)
+    %6 : e::Unknown = edge::add(%er, %el)
+    %7 : e::Unknown = edge::leaky_relu(%6)
+    %coeff : e::Unknown = edge::exp(%7)
 
     # s = sum(coeff) 
     %s : n::Unknown = agg::sum(%coeff)
       
     # alpha = [c/s for c in coeff]
-    %alpha: e::Unknown = edge::div(%coeff, %s)
+    %alpha : e::Unknown = edge::div(%coeff, %s)
 
     # rst = sum([ef[0]*ef[1] for ef in zip(alpha, feat_src)])
-    %8, %9: e::Unknown = layout::zip(%alpha, %feat_src)
+    %8, %9 : e::Unknown = layout::zip(%alpha, %feat_src)
     %10 : e::Unknown = edge::mul(%8, %9)
     %rst : n::Unknown = agg::sum(%10)
 ```
 
-#### Memory Planning
+#### Code Generation 
+**TODO: Add data type info. handling bcast**
+We must generate cuda code for edge-scoped and agg-scoped operations as there are no built-in operations in DL systems to support them. We can optionaly generate code for node-scoped element-wise functions that involves no prameters or only constants to increase compute/memory ratio. (We need a good reason of not generating code for operations containing trainable parameters.)
+
+In GNN workload, it's common to see a pattern: an edge-wise operation followed by an aggregation function. We can have three parallelization strategies: src node parallel, edge parallel and dst node parallel. Using edge or src node parallel introduces atomic operations due to the aggregation operation at the destination node. This makes dst node parallel a more plausible solution. We also need to switch from outcsr to incsr format.
+
+We design the following execution template for generating code for GNN workload:
+```
+tempate <typename Idx, typename DType>
+struct GData {
+    // input and output datafields
+    Idx feat_size;
+    // ...
+};
+
+template <typename Idx, typename DType>
+__global__ void ${kernelName}(GData<Idx, DType> gdata, Graph<Idx> graph) {
+    Idx feat_size = gdata.feat_size;
+    Idx num_nodes = graph.num_nodes;
+    Idx feat_step = blockIdx.y*blockDim.y;
+    for (Idx dst_id = blockIdx.x; dst_id < num_nodes; dst_id += gridDim.x) {
+        for (Idx ty = blockIdx.y * blockDim.y + threadIdx.y; ty < feat_size; feat_size += feat_step) {
+            Idx start_off = graph.getInedgesStart(eid);
+            Idx end_off = graph.getInedgesEnd(eid);
+            ${aggInit}
+            for (Idx eid=start_off;eid<end_off;++eid) {
+                src_id = graph.getInedges(eid);
+                ${edge} // formed by concating a series of edgeCompute
+                ${aggCompute}
+            }
+            ${aggWrite}
+        }
+    }
+}
+```
+
+Sample generated cuda code for operation:
+```
+%6 : e::Unknown = edge::add(%el, %er) => 
+edgeCompute= "
+    // if not fusion: el = gdata.el[gdata.compute_noff(src_id, ty)];
+    // if not fusion: er = gdata.el[gdata.compute_noff(dst_id, ty)]; 
+    v6 = el + er;
+    // if materialize: gdata.v6[gdata.compute_eoff(eid, ty] = er;"
+
+%7 : e::Unknown = edge::leaky_relu(%6) => 
+edgeCompute= "
+    // if not fusion: v6 = gdata.v6[gdata.compute_eoff(eid, ty)];
+    v7 = leaky_relu(v6);
+    // if materialize: gdata.v7[gdata.compute_eoff(eid, ty)] = v7;"
+
+coeff : e:Unknown = edge::exp(%7) =>
+edgeCompute= "
+    // if not fusion: v7 = gdata.v7[gdata.compute_eoff(eid, ty)];
+    coeff = exp(v7);
+    // if materialize: gdata.coeff[gdata.compute_eoff(eid, ty)] = coeff;"
+```
+
+Generate cuda code for aggregation operation(only show the fused version):
+```
+%s : n::Unknown = agg::sum(%coeff) =>
+    aggInit = "s = 0.;"
+    aggCompute = "s += coeff;"
+    aggWrite = "gdata.s[gdata.compute_noff(dst_id, ty)] = s;"
+// if materialize: 
+```
+
+#### Auto differentiation
+**TODO: Add data type info. handling bcast.**
+The scope of auto-differentiation is the same as code generation. Other parts will be delegated to the auto-diff of DL framework.
+
+We need to first figure out which ParamTensor requires gradient and which variable in zoomIn() are used after the context is closed. Variables are not used can be eilimitated. To know which variables are used and may have gradients, we create an autograd function zoomOut(), which takes a variadic number of symbolic variables used whithin zoomIn() context and returns the associated tensors.
+
+In GAT, zoomOut is triggered for rst. Rst has gradient gradOut which is of same dimension as rst. attn_l, attn_r and linear all contains parameters. Therfore the auto-diff boundary for gat will be starting from %6 = ... util %rst = ....
+
+Backward IR for edge computation. Here the sum will be aggregated on source nodes(it seems necessary to provide two name scopes for aggregation: srcagg: aggregation on src nodes and dstagg: aggregation on destination nodes). 
+```
+coeff : e:Unknown = edge::exp(%7) =>
+gradv7 : e:Unknown = gradcoeff * coeff
+
+%7 : e::Unknown = edge::leaky_relu(%6) => 
+gradv6 : e:Unkown = gradv7 * edge::backward_leaky_relu(%6)
+
+%6 : e::Unknown = edge::add(%el, %er) => 
+gradel: n:Unkown = srcagg::sum(gradv6)
+grader: n:Unkown = dstagg::sum(gradv6)
+```
+
+Backward IR for sum aggregation 
+```
+%s : n::Unknown = agg::sum(%coeff) =>
+gradcoeff =  srcagg::sum(grads)
+```
 
 #### Operator Fusion
+**TODO: Add backward fusion**
+Create fusion groups. Operations inside a group will be compiled to a single GPU kernel meaning that the result of producer operator can be immediately consumed by consumer. 
 
-#### Code Generation
+We decide fusion boundaries using a two-direction greedy expansion strategy. We start from the beginning of the IR, when we encounter an edge function, we create a fusion group that include the current edge function then check whether it's possible to fuse the operations previous and next (based on input-output dependency) to it and expand the fusion group if they are fusable until the fusion group can no longer expand. 
 
-#### Any Other Optimization Passes?
-Constant folding? 
+How to determine whether it's fusable? Several heuristics we have:
+0. consecutive element-wise operators in the same scope can be fused together;
+1. agg operations can be fused with its upstream edge scoped element-wise operators;
+2. agg operations can be fused with its downstream node scope element-wise operators.
+
+Applying this heuristic to GAT forward we get the following:
+```
+graph(%num_heads: Int,
+      %out_feats: Int,
+      %drop_out_rate: Float,
+      %attn_l : ParamTensor,
+      %attn_r : ParamTensor,
+      %nfeat: NodeFeatTensor):
+    # feat_src = [self.fc(self.feat_drop(n.nfeat)).view(self.num_heads, self.out_feats) for n in v.innbs]
+    %1 : n::Unknown = node::drop_out(%nfeat, %drop_out_rate) 
+    %2 : n::Unknown = node::linear(%1)
+    %feat_src : n::Unknown = node::view(%2, %num_heads, %out_feats)
+
+    # el = [ f * self.attn_l.sum(dim=-1) for f in feat_src]
+    %3 : n::Unknown = node::mul(%feat_src, %attn_l)
+    %4 : n::Unknown = prim::Constant(-1)
+    %el : n::Unknown = node::sum(%3, dim=%4) 
+
+    # er = self.fc(self.feat_drop(v.nfeat)).view(self.num_heads, self.out_feats) * self.attn_r.sum(dim=-1)
+    %5 : n::Unknown = node::mul(%feat_src, %attn_r)
+    %er : n::Unknown = node::sum(%5, dim=%4) 
+
+    %s : n::Unknown, $coeff : e::Unknown = fusedGraph1(%el, %er)
+
+    return fusedGraph2(%s, %coeff)
+
+fusedGraph1(%el : n::Unknown
+           %er : n::Unknown):
+    # coeff = [self.leaky_relu(th.exp(l + er)) for l in el] 
+    %6 : e::Unknown = edge::add(%er, %el)
+    %7 : e::Unknown = edge::leaky_relu(%6)
+    %coeff : e::Unknown = edge::exp(%7)
+
+    # s = sum(coeff) 
+    %s : n::Unknown = agg::sum(%coeff)
+    return %s, %coeff
+
+fusedGraph2(%s : n::Unknown
+           %coeff: n::Unknown):
+    # alpha = [c/s for c in coeff]
+    %alpha : e::Unknown = edge::div(%coeff, %s)
+
+    # rst = sum([ef[0]*ef[1] for ef in zip(alpha, feat_src)])
+    %8, %9 : e::Unknown = layout::zip(%alpha, %feat_src)
+    %10 : e::Unknown = edge::mul(%8, %9)
+    %rst : n::Unknown = agg::sum(%10)
+    return %rst
+```
+
+#### Memory Planning
+Memory planning requires knowing the type and shape of each variables, number of edges, number of nodes and etc. We plan which variables will be re-computed and which variables will be materialized. This directly influence how backward computations are carries out. The influence is double-directional meaning that choosing the materialization point will affect how backward computation is conducted. Change of the backward computation can affect the planning objective e.g. amount of data loading.
+
+We may borrow insight from works on recomputation for general nn.
 
 ## Implementations
-TODO:
+**TODO:**
 0. The folder and file names
 1. Declarations for all classes, procedures, and global/class variables
 2. Descriptions of all procedures, including the purpose of the procedure, an explanation of how it works and/or pseudocode
