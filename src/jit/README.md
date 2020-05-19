@@ -218,74 +218,6 @@ graph(%num_heads: Int,
     %10 : e::Unknown = edge::mul(%8, %9)
     %rst : n::Unknown = agg::sum(%10)
 ```
-
-#### Code Generation 
-**TODO: Add data type info. handling bcast**
-We must generate cuda code for edge-scoped and agg-scoped operations as there are no built-in operations in DL systems to support them. We can optionaly generate code for node-scoped element-wise functions that involves no prameters or only constants to increase compute/memory ratio. (We need a good reason of not generating code for operations containing trainable parameters.)
-
-In GNN workload, it's common to see a pattern: an edge-wise operation followed by an aggregation function. We can have three parallelization strategies: src node parallel, edge parallel and dst node parallel. Using edge or src node parallel introduces atomic operations due to the aggregation operation at the destination node. This makes dst node parallel a more plausible solution. We also need to switch from outcsr to incsr format.
-
-We design the following execution template for generating code for GNN workload:
-```
-tempate <typename Idx, typename DType>
-struct GData {
-    // input and output datafields
-    Idx feat_size;
-    // ...
-};
-
-template <typename Idx, typename DType>
-__global__ void ${kernelName}(GData<Idx, DType> gdata, Graph<Idx> graph) {
-    Idx feat_size = gdata.feat_size;
-    Idx num_nodes = graph.num_nodes;
-    Idx feat_step = blockIdx.y*blockDim.y;
-    for (Idx dst_id = blockIdx.x; dst_id < num_nodes; dst_id += gridDim.x) {
-        for (Idx ty = blockIdx.y * blockDim.y + threadIdx.y; ty < feat_size; feat_size += feat_step) {
-            Idx start_off = graph.getInedgesStart(eid);
-            Idx end_off = graph.getInedgesEnd(eid);
-            ${aggInit}
-            for (Idx eid=start_off;eid<end_off;++eid) {
-                src_id = graph.getInedges(eid);
-                ${edge} // formed by concating a series of edgeCompute
-                ${aggCompute}
-            }
-            ${aggWrite}
-        }
-    }
-}
-```
-
-Sample generated cuda code for operation:
-```
-%6 : e::Unknown = edge::add(%el, %er) => 
-edgeCompute= "
-    // if not fusion: el = gdata.el[gdata.compute_noff(src_id, ty)];
-    // if not fusion: er = gdata.el[gdata.compute_noff(dst_id, ty)]; 
-    v6 = el + er;
-    // if materialize: gdata.v6[gdata.compute_eoff(eid, ty] = er;"
-
-%7 : e::Unknown = edge::leaky_relu(%6) => 
-edgeCompute= "
-    // if not fusion: v6 = gdata.v6[gdata.compute_eoff(eid, ty)];
-    v7 = leaky_relu(v6);
-    // if materialize: gdata.v7[gdata.compute_eoff(eid, ty)] = v7;"
-
-coeff : e:Unknown = edge::exp(%7) =>
-edgeCompute= "
-    // if not fusion: v7 = gdata.v7[gdata.compute_eoff(eid, ty)];
-    coeff = exp(v7);
-    // if materialize: gdata.coeff[gdata.compute_eoff(eid, ty)] = coeff;"
-```
-
-Generate cuda code for aggregation operation(only show the fused version):
-```
-%s : n::Unknown = agg::sum(%coeff) =>
-    aggInit = "s = 0.;"
-    aggCompute = "s += coeff;"
-    aggWrite = "gdata.s[gdata.compute_noff(dst_id, ty)] = s;"
-// if materialize: 
-```
-
 #### Auto differentiation
 **TODO: Add data type info. handling bcast.**
 The scope of auto-differentiation is the same as code generation. Other parts will be delegated to the auto-diff of DL framework.
@@ -372,11 +304,88 @@ fusedGraph2(%s : n::Unknown
     %rst : n::Unknown = agg::sum(%10)
     return %rst
 ```
+The end result is a partitioned graph with subGraphs
 
 #### Memory Planning
 Memory planning requires knowing the type and shape of each variables, number of edges, number of nodes and etc. We plan which variables will be re-computed and which variables will be materialized. This directly influence how backward computations are carries out. The influence is double-directional meaning that choosing the materialization point will affect how backward computation is conducted. Change of the backward computation can affect the planning objective e.g. amount of data loading.
 
-We may borrow insight from works on recomputation for general nn.
+We may borrow insight from works on recomputation for general nn. The end result is an annotation for each node in the graph whether or not to materiaze its outputs.
+
+#### Code Generation 
+We must generate cuda code for edge-scoped and agg-scoped operations as there are no built-in operations in DL systems to support them. We can optionaly generate code for node-scoped element-wise functions that involves no prameters or only constants to increase compute/memory ratio. (We need a good reason of not generating code for operations containing trainable parameters.)
+
+In GNN workload, it's common to see a pattern: an edge-wise operation followed by an aggregation function. We can have three parallelization strategies: src node parallel, edge parallel and dst node parallel. Using edge or src node parallel introduces atomic operations due to the aggregation operation at the destination node. This makes dst node parallel a more plausible solution. We also use incsr format for forward propagation.
+
+We design the following execution template for generating code for GNN workload:
+```
+tempate <typename Idx, typename DType>
+struct GData {
+    // input and output datafields
+    Idx feat_size;
+    // ...
+};
+
+// we have two dimensional blocks but only one dimension thread to simplify code generation
+template <typename Idx, typename DType>
+__global__ void ${kernelName}(GData<Idx, DType> gdata, Graph<Idx> graph) {
+    Idx feat_size = gdata.feat_size;
+    Idx num_nodes = graph.num_nodes;
+    Idx feat_step = gridDim.y*blockDim.y;
+    for (Idx dst_id = blockIdx.x; dst_id < num_nodes; dst_id += gridDim.x) {
+        for (Idx ty = blockIdx.y * blockDim.y + threadIdx.y; ty < feat_size; feat_size += feat_step) {
+            Idx start_off = graph.getInedgesStart(eid);
+            Idx end_off = graph.getInedgesEnd(eid);
+            ${aggInit}
+            for (Idx eid=start_off;eid<end_off;++eid) {
+                src_id = graph.getInedges(eid);
+                ${edgeCompute} // formed by concating a series of edgeCompute
+                ${aggCompute}
+            }
+            ${aggWrite}
+            ${nodeCompute}
+        }
+    }
+}
+```
+
+Sample generated cuda code for operation:
+```
+%6 : e::Unknown = edge::add(%el, %er) => 
+edgeCompute= "
+    // if not fusion: el = gdata.el[gdata.compute_noff(src_id, ty)];
+    // if not fusion: er = gdata.el[gdata.compute_noff(dst_id, ty)]; 
+    v6 = el + er;
+    // if materialize: gdata.v6[gdata.compute_eoff(eid, ty)] = er;"
+
+%7 : e::Unknown = edge::leaky_relu(%6) => 
+edgeCompute= "
+    // if not fusion: v6 = gdata.v6[gdata.compute_eoff(eid, ty)];
+    v7 = leaky_relu(v6);
+    // if materialize: gdata.v7[gdata.compute_eoff(eid, ty)] = v7;"
+
+coeff : e:Unknown = edge::exp(%7) =>
+edgeCompute= "
+    // if not fusion: v7 = gdata.v7[gdata.compute_eoff(eid, ty)];
+    coeff = exp(v7);
+    // if materialize: gdata.coeff[gdata.compute_eoff(eid, ty)] = coeff;"
+```
+
+Generate cuda code for aggregation operation(only show the fused version):
+```
+%s : n::Unknown = agg::sum(%coeff) =>
+    aggInit = "s = 0.;"
+    aggCompute = "s += coeff;"
+    aggWrite = "gdata.s[gdata.compute_noff(dst_id, ty)] = s;"
+// if materialize: 
+```
+
+Generate cuda code for broadcast oeperation:
+Definition of broadcast operation: element-wise operation for two tensors, A and B. A and B has different dimensions. For example, A has dimension 5 * 4 and B has dimension 1 * 4. Then mul(A, B) will returns a tensor of diemension 5 * 4.
+
+For operations that are fused into one kernel, it's either an element-wise operation or an broadcast operation or an aggregation among edges therefore the output's dimensions will be larger than any input/intermediate results. We map each feature in output tensor to exactly one thread. To access input, if it has the same dimensions as output, we can directly use thread id (ty). To access inputs of different dimension with output, we need to map ty to the required offsets in that input, the formula is given by first compute the coordinate in output, then map to the coordinate of inputs finally dot product with the strides. We apply the same rule recursively and propogate index information backward to input. Due to broadcasting operation, we may need to generate code starting from the end of the kernel because for operators in the begining, it is not clear how ty is mapped to their accessor index.
+
+To summarize:
+For code generation, we are given the fusion groupGraph or normal nodes. we first start from the leaf node (TODO: deal with multiple leaves) and propogate the index accessing information to the inputs (a series of mapping function from ty to feature index). Then starting from first node, we generate edgeCompute one by one. For each statement we will use the option fusion and materialization annotated in pervious passes to generate string arguments as the template argument to the kernel template.
 
 ## Implementations
 **TODO:**
