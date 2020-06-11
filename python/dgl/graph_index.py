@@ -683,6 +683,15 @@ class GraphIndex(ObjectBase):
         rev_csr = _CAPI_DGLGraphGetAdj(self, False, "csr")
         rev_order = rev_csr(2)
         return utils.toindex(order), utils.toindex(rev_order)
+    
+    def get_in_csr(self):
+        csr = _CAPI_DGLGraphGetAdj(self, False, 'csr')
+        return csr
+
+    def get_out_csr(self):
+        csr = _CAPI_DGLGraphGetAdj(self, True, 'csr')
+        return csr
+
 
     def adjacency_matrix(self, transpose, ctx):
         """Return the adjacency matrix representation of this graph.

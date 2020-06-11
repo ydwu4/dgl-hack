@@ -185,6 +185,10 @@ class NDArrayBase(_NDArrayBase):
     def ctx(self):
         """context of this array"""
         return self.handle.contents.ctx
+    
+    @property
+    def data(self):
+        return ctypes.c_void_p(self.handle.contents.data)
 
     @property
     def context(self):

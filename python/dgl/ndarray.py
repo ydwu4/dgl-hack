@@ -22,6 +22,10 @@ class NDArray(NDArrayBase):
     """Lightweight NDArray class for DGL framework."""
     def __len__(self):
         return functools.reduce(operator.mul, self.shape, 1)
+    
+    def copy_to_gpu(self, dev_id=0):
+        copy = self.copyto(gpu(dev_id))
+        return copy
 
 def cpu(dev_id=0):
     """Construct a CPU device

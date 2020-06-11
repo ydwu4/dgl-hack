@@ -1250,6 +1250,19 @@ def fused_gat(graph, feat_src, el, er, sum, exp, ret, slope):
     """
     pass
 
+def run_egl(exectuor):
+    '''
+    exec_context : 
+        The execution template, which contains various informations
+    
+    Returns
+    ------
+    List of tensor
+        The tensors used in zoomOut
+    '''
+    pass
+
+
 
 def copy_reduce(reducer, graph, target, in_data, out_size, in_map, out_map):
     """Copy target data and perform reduce based on graph structure.

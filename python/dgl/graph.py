@@ -40,6 +40,14 @@ class DGLBaseGraph(object):
     """
     def __init__(self, graph):
         self._graph = graph
+    
+    def get_in_csr(self):
+        csr = self._graph.get_in_csr()
+        return csr
+
+    def get_out_csr(self):
+        csr = self._graph.get_out_csr()
+        return csr
 
     def number_of_nodes(self):
         """Return the number of nodes in the graph.
