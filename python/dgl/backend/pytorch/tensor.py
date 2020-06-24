@@ -419,27 +419,27 @@ def fused_gat(graph, feat_src, el, er, slope):
     ret = th.empty_like(feat_src)
     return FusedGat.apply(g, feat_src, el, er, s, exp, ret, slope)
 
-class RunEgl(th.autograd.Function):
+class KernelWrapper(th.autograd.Function):
     @staticmethod
-    def forward(ctx, executor):
-        ctx.backward_cache = executor
-        return executor.forward()
+    def forward(ctx, executor, kid, *args):
+        ctx.backward_cache = executor, kid
+        return executor.forward_cb(kid, args)
+
     @staticmethod
-    def backward(ctx, gradout):
-        executor = ctx.backward_cache
-        return executor.backward(gradout)
+    def backward(ctx, *gradout):
+        executor, kid = ctx.backward_cache
+        return None, None, executor.backward_cb(kid, gradout)
 
 def run_egl(executor):
     def new_zeros_call_back(size, dtype, device):
         t = th.zeros(size=size, dtype=dtype, device=device)
         return  t
     def tensor_raw_ptr(tensor):
-        #return zerocopy_to_dgl_ndarray(tensor).data
         import ctypes
         return ctypes.c_void_p(tensor.data_ptr())
     executor.set_new_zeros_cb(new_zeros_call_back)
     executor.set_raw_ptr_cb(tensor_raw_ptr)
-    return RunEgl.apply(executor)
+    return executor.execute(KernelWrapper)
 
 class CopyReduce(th.autograd.Function):
     @staticmethod
