@@ -423,16 +423,18 @@ class KernelWrapper(th.autograd.Function):
     @staticmethod
     def forward(ctx, executor, kid, *args):
         ctx.backward_cache = executor, kid
-        return executor.forward_cb(kid, args)
+        ret = executor.forward_cb(kid, args)
+        return ret
 
     @staticmethod
     def backward(ctx, *gradout):
+        print('within backward')
         executor, kid = ctx.backward_cache
-        return None, None, executor.backward_cb(kid, gradout)
+        return (None, None) +  executor.backward_cb(kid, gradout)
 
 def run_egl(executor):
-    def new_zeros_call_back(size, dtype, device):
-        t = th.zeros(size=size, dtype=dtype, device=device)
+    def new_zeros_call_back(size, dtype, device, requires_grad=True):
+        t = th.zeros(size=size, dtype=dtype, device=device, requires_grad=requires_grad)
         return  t
     def tensor_raw_ptr(tensor):
         import ctypes

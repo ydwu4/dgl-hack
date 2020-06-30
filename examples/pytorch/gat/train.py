@@ -18,6 +18,7 @@ from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
 from dgl import transform
 from gat import GAT, FusedGAT
+from egl_gat import EglGAT
 from utils import EarlyStopping
 
 
@@ -92,7 +93,8 @@ def main(args):
     # create model
     heads = ([args.num_heads] * args.num_layers) + [args.num_out_heads]
     #model = GAT(g,
-    model = FusedGAT(g,
+    model = EglGAT(g,
+    #model = FusedGAT(g,
                 args.num_layers,
                 num_feats,
                 args.num_hidden,
