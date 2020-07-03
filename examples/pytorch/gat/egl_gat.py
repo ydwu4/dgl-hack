@@ -48,6 +48,8 @@ class EglGATConv(nn.Module):
 
     def forward(self, graph, feat):
         graph = graph.local_var()
+        dgl_context = dgl.utils.to_dgl_context(feat.device)
+        graph = graph._graph.get_immutable_gidx(dgl_context)
         h_src = h_dst = self.feat_drop(feat)
         with self.cm.zoomIn(namespace=[self, th], graph=graph, node_feats={'f' : h_src}, edge_feats={'ef': th.rand(10, 1)}) as v:
             feat_src = [self.fc(n.f).view(self._num_heads, self._out_feats) for n in v.innbs]
