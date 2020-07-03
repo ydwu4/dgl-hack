@@ -124,8 +124,11 @@ def main(args):
         if epoch >= 3:
             t0 = time.time()
         # forward
+        tf = time.time()
+        torch.cuda.synchronize()
         logits = model(features)
         loss = loss_fcn(logits[train_mask], labels[train_mask])
+        tf1 =time.time()
 
         optimizer.zero_grad()
         torch.cuda.synchronize()
@@ -133,7 +136,7 @@ def main(args):
         loss.backward()
         torch.cuda.synchronize()
         t2 =time.time()
-        print(t2 - t1, 's')
+        print('forward time', tf1 - tf, 's. backward time:', t2 - t1, 's')
         optimizer.step()
 
         if epoch >= 3:
