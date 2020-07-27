@@ -1,7 +1,6 @@
 """Torch modules for graph attention networks(GAT)."""
 # pylint: disable= no-member, arguments-differ, invalid-name
 import argparse
-import time
 
 import torch as th
 import dgl
@@ -35,7 +34,7 @@ class EglGATConv(nn.Module):
                     self._in_feats, num_heads * out_feats, bias=False)
         self.reset_parameters()
         self.activation = activation
-        self.cm = ContextManager()
+        self.cm = ContextManager(dgl.backend.run_egl)
 
     def reset_parameters(self):
         """Reinitialize learnable parameters."""
@@ -60,7 +59,7 @@ class EglGATConv(nn.Module):
             alpha = [c/s for c in coeff]
             rst = sum([ef[0]*ef[1] for ef in zip(alpha, feat_src)])
             v.collect_output(rst)
-        rst = self.cm.zoomOut(run_egl=dgl.backend.run_egl)
+        rst = self.cm.zoomOut()
         # residual
         if self.res_fc is not None:
             resval = self.res_fc(h_dst).view(h_dst.shape[0], -1, self._out_feats)

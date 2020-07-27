@@ -36,7 +36,7 @@ class EglGATConvTest(nn.Module):
                     self._in_feats, num_heads * out_feats, bias=False)
         self.reset_parameters()
         self.activation = activation
-        self.cm = ContextManager()
+        self.cm = ContextManager(B.run_egl)
 
     def reset_parameters(self):
         """Reinitialize learnable parameters."""
@@ -46,11 +46,6 @@ class EglGATConvTest(nn.Module):
         nn.init.xavier_normal_(self.attn_r, gain=gain)
         if isinstance(self.res_fc, nn.Linear):
             nn.init.xavier_normal_(self.res_fc.weight, gain=gain)
-        #nn.init.constant_(self.fc.weight, 1)
-        #nn.init.constant_(self.attn_l, 1)
-        #nn.init.constant_(self.attn_r, 1)
-        #if isinstance(self.res_fc, nn.Linear):
-        #    nn.init.constant_(self.res_fc.weight, 1)
 
     def forward(self, graph, feat):
         graph = graph.local_var()
@@ -85,7 +80,7 @@ class EglGATConvTest(nn.Module):
             alpha = [c/s for c in coeff]
             rst = sum([ef[0]*ef[1] for ef in zip(alpha, feat_src)])
             v.collect_output(rst)
-        rst = self.cm.zoomOut(run_egl=B.run_egl)
+        rst = self.cm.zoomOut()
         grad_out = th.ones_like(rst)
         egl_graer= grad(outputs=rst, inputs=self.cm._executor.ts.tensor_map['v7'], grad_outputs=grad_out, retain_graph=True)
         egl_grael= grad(outputs=rst, inputs=self.cm._executor.ts.tensor_map['v3'], grad_outputs=grad_out, retain_graph=True)

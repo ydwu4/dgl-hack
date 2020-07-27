@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <cuda.h>
+#include <chrono>
 
 #include "../binary_reduce_impl.h"
 #include "../csr_interface.h"
@@ -158,38 +159,12 @@ In backward computation:
                         grad_el = sum([grad_exp[e.eid] * leaky_relu(gdata.el[src] + gdata.er[dst]) * grad_leaky_relu(gdata.el[src] + gdata.er[dst]) for e in curnode.outedges])
                         grad_exp = [grad_out[e.dst] * (feat_src[e.src] - out[e.dst])/sum[e.dst] for e in outedges]
 ***/
-//template <typename Idx, typename DType>
-//__global__ void fusedGatBackwardGradElEr(BackwardGatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
-//    Idx src_vid = blockIdx.y;
-//    Idx stride_vid = gridDim.y;
-//    Idx e_xlen = gdata.e_xlen;
-//    Idx stride_head = blockDim.x * gridDim.x;
-//    Idx hidden_xlen = gdata.feat_src_xlen/e_xlen;
-//    while (src_vid < csr.row_offsets.length -1) {
-//        Idx start_off = csr.row_offsets.data[src_vid];
-//        Idx end_off = csr.row_offsets.data[src_vid+1];
-//        Idx head_idx = blockIdx.x * blockDim.x  + threadIdx.x;
-//        while (head_idx < e_xlen) {
-//            Idx feat_idx = threadIdx.y;
-//            while (feat_idx < hidden_xlen) {
-//                DType s = 0.;
-//                Idx feat_src_offset = src_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx;
-//                for (Idx e=start_off; e<end_off; ++e) {
-//                    Idx eid = gdata.eids[e];
-//                    Idx dst_vid = csr.column_indices.data[e];
-//                }
-//                feat_idx += blockDim.y;
-//            }
-//            head_idx += stride_head;
-//        }
-//        src_vid += stride_vid;
-//    }
-//}
 template <typename DType>
 __device__ DType gradLeaky(DType val, DType slope) {
     return val > 0 ? 1 : slope;
 }
 
+//12500
 template <typename Idx, typename DType>
 __global__ void fusedGatBackwardGradElEr(BackwardGatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
     Idx src_vid = blockIdx.y;
@@ -220,6 +195,150 @@ __global__ void fusedGatBackwardGradElEr(BackwardGatFusedData<Idx, DType> gdata,
                 }
                 atomicAdd(gdata.grad_el + src_node_feat_offset , s);
                 feat_idx += blockDim.y;
+            }
+            head_idx += stride_head;
+        }
+        src_vid += stride_vid;
+    }
+}
+
+// 11685 basic version for num_hidden 32 num_heads 8
+template <typename Idx, typename DType>
+__global__ void fusedGatBackwardGradElEr3(BackwardGatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
+    Idx src_vid = blockIdx.y;
+    Idx stride_vid = gridDim.y;
+    Idx e_xlen = gdata.e_xlen;
+    Idx stride_head = blockDim.y;
+    Idx hidden_xlen = gdata.feat_src_xlen/e_xlen;
+    while (src_vid < csr.row_offsets.length -1) {
+        Idx start_off = csr.row_offsets.data[src_vid];
+        Idx end_off = csr.row_offsets.data[src_vid+1];
+        Idx head_idx = threadIdx.y;
+        while (head_idx < e_xlen) {
+            Idx feat_idx = blockIdx.x * blockDim.x  + threadIdx.x;
+            while (feat_idx < hidden_xlen) {
+                DType s = 0.;
+                Idx feat_src_offset = src_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx;
+                Idx src_node_feat_offset = src_vid*e_xlen + head_idx;
+                for (Idx e=start_off; e<end_off; ++e) {
+                    Idx edge_offset = gdata.eids[e] * e_xlen + head_idx;
+                    Idx dst_vid = csr.column_indices.data[e];
+                    Idx dst_node_feat_offset = dst_vid*e_xlen + head_idx;
+                    Idx dst_out_offset = dst_vid*gdata.feat_src_xlen + head_idx*hidden_xlen + feat_idx;
+                    DType a = gdata.grad_out[dst_out_offset] * gdata.feat_src[feat_src_offset];
+                    DType a1 = a/gdata.sum[dst_node_feat_offset];
+                    DType b = gdata.grad_out[dst_out_offset] * gdata.ret[dst_out_offset];
+                    DType b1 = b/gdata.sum[dst_node_feat_offset];
+                    DType c = -1 * b1;
+                    DType e = a1 + c;
+                    DType tmp_sum = gdata.el[src_node_feat_offset] + gdata.er[dst_node_feat_offset];
+                    DType g = e * gdata.exp[edge_offset];
+                    DType h = tmp_sum > 0? 1 : gdata.leaky_relu_slope;
+                    DType k = g * h;
+                    s += k;
+                    atomicAdd(gdata.grad_er + dst_node_feat_offset, k);
+                }
+                atomicAdd(gdata.grad_el + src_node_feat_offset , s);
+                feat_idx += blockDim.x*gridDim.x;
+            }
+            head_idx += stride_head;
+        }
+        src_vid += stride_vid;
+    }
+}
+
+// 13213: v3 with tiling for pubmed num_hidden 32 num_heads 8
+template <typename Idx, typename DType>
+__global__ void fusedGatBackwardGradElEr4(BackwardGatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
+    Idx src_vid = blockIdx.y;
+    Idx stride_vid = gridDim.y;
+    Idx e_xlen = gdata.e_xlen;
+    Idx stride_head = blockDim.y;
+    Idx hidden_xlen = gdata.feat_src_xlen/e_xlen;
+    Idx tiled_x = threadIdx.x % 8 + 8 * (threadIdx.y % 4);
+    Idx tiled_y = threadIdx.x / 8 + 4 * (threadIdx.y / 4);
+    while (src_vid < csr.row_offsets.length -1) {
+        Idx start_off = csr.row_offsets.data[src_vid];
+        Idx end_off = csr.row_offsets.data[src_vid+1];
+        Idx head_idx = tiled_y;
+        while (head_idx < e_xlen) {
+            Idx feat_idx = blockIdx.x * blockDim.x  + threadIdx.x;
+            while (feat_idx < hidden_xlen) {
+                DType s = 0.;
+                Idx feat_src_offset = src_vid*gdata.feat_src_xlen + tiled_y*32 + tiled_x;
+                Idx src_node_feat_offset = src_vid*e_xlen + head_idx;
+                for (Idx e=start_off; e<end_off; ++e) {
+                    Idx edge_offset = gdata.eids[e] * e_xlen + head_idx;
+                    Idx dst_vid = csr.column_indices.data[e];
+                    Idx dst_node_feat_offset = dst_vid*e_xlen + head_idx;
+                    Idx dst_out_offset = dst_vid*gdata.feat_src_xlen + tiled_y*32 + tiled_x;
+                    DType a = gdata.grad_out[dst_out_offset] * gdata.feat_src[feat_src_offset];
+                    DType a1 = a/gdata.sum[dst_node_feat_offset];
+                    DType b = gdata.grad_out[dst_out_offset] * gdata.ret[dst_out_offset];
+                    DType b1 = b/gdata.sum[dst_node_feat_offset];
+                    DType c = -1 * b1;
+                    DType e = a1 + c;
+                    DType tmp_sum = gdata.el[src_node_feat_offset] + gdata.er[dst_node_feat_offset];
+                    DType g = e * gdata.exp[edge_offset];
+                    DType h = tmp_sum > 0? 1 : gdata.leaky_relu_slope;
+                    DType k = g * h;
+                    s += k;
+                    atomicAdd(gdata.grad_er + dst_node_feat_offset, k);
+                }
+                atomicAdd(gdata.grad_el + src_node_feat_offset , s);
+                feat_idx += blockDim.x*gridDim.x;
+            }
+            head_idx += stride_head;
+        }
+        src_vid += stride_vid;
+    }
+}
+
+// with shared memory and tiling
+template <typename Idx, typename DType>
+__global__ void fusedGatBackwardGradElEr5(BackwardGatFusedData<Idx, DType> gdata, minigun::Csr<Idx> csr) {
+    extern __shared__ float s[8*32 + 32];
+    float * feat_src = s;
+    float * er = s + 8*32;
+    // TO be done
+    // init, __synchrounize, and access
+    Idx src_vid = blockIdx.y;
+    Idx stride_vid = gridDim.y;
+    Idx e_xlen = gdata.e_xlen;
+    Idx stride_head = blockDim.y;
+    Idx hidden_xlen = gdata.feat_src_xlen/e_xlen;
+    Idx tiled_x = threadIdx.x % 8 + 8 * (threadIdx.y % 4);
+    Idx tiled_y = threadIdx.x / 8 + 4 * (threadIdx.y / 4);
+    while (src_vid < csr.row_offsets.length -1) {
+        Idx start_off = csr.row_offsets.data[src_vid];
+        Idx end_off = csr.row_offsets.data[src_vid+1];
+        Idx head_idx = tiled_y;
+        while (head_idx < e_xlen) {
+            Idx feat_idx = blockIdx.x * blockDim.x  + threadIdx.x;
+            while (feat_idx < hidden_xlen) {
+                DType s = 0.;
+                Idx feat_src_offset = src_vid*gdata.feat_src_xlen + tiled_y*32 + tiled_x;
+                Idx src_node_feat_offset = src_vid*e_xlen + head_idx;
+                for (Idx e=start_off; e<end_off; ++e) {
+                    Idx edge_offset = gdata.eids[e] * e_xlen + head_idx;
+                    Idx dst_vid = csr.column_indices.data[e];
+                    Idx dst_node_feat_offset = dst_vid*e_xlen + head_idx;
+                    Idx dst_out_offset = dst_vid*gdata.feat_src_xlen + tiled_y*32 + tiled_x;
+                    DType a = gdata.grad_out[dst_out_offset] * gdata.feat_src[feat_src_offset];
+                    DType a1 = a/gdata.sum[dst_node_feat_offset];
+                    DType b = gdata.grad_out[dst_out_offset] * gdata.ret[dst_out_offset];
+                    DType b1 = b/gdata.sum[dst_node_feat_offset];
+                    DType c = -1 * b1;
+                    DType e = a1 + c;
+                    DType tmp_sum = gdata.el[src_node_feat_offset] + gdata.er[dst_node_feat_offset];
+                    DType g = e * gdata.exp[edge_offset];
+                    DType h = tmp_sum > 0? 1 : gdata.leaky_relu_slope;
+                    DType k = g * h;
+                    s += k;
+                    atomicAdd(gdata.grad_er + dst_node_feat_offset, k);
+                 }
+                atomicAdd(gdata.grad_el + src_node_feat_offset , s);
+                feat_idx += blockDim.x*gridDim.x;
             }
             head_idx += stride_head;
         }
@@ -282,7 +401,6 @@ void FusedGatKernelImpl(
         //gatExpLeakyReluSumKernel<<<nblks, nthrs, el_xlen*sizeof(DType), thr_entry->stream>>>(gdata, csr);
         gatExpLeakyReluSumKernel<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, csr);
         //print_gdata<Idx, DType>(feat_src,el,er,sum,exp,ret,csr,el_xlen, feat_src_xlen);
-
         nthrs_x = utils::FindNumThreads(el_xlen, 64);
         nthrs_y = utils::FindNumThreads(gdata.feat_src_hidden, MAX_NTHRS/nthrs_x);
         nblks_x = 1;
@@ -350,6 +468,8 @@ void BackwardFusedGatKernelImpl(
         const dim3 nblks(nblks_x, nblks_y);
         LOG(INFO) << "GradFeatSrc kernel blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
         fusedGatBackwardGradFeatSrc<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, ocsr);
+        //const dim3 nthrs3(nthrs_y, nthrs_x);
+        //fusedGatBackwardGradElEr4<<<nblks, nthrs3, 0, thr_entry->stream>>>(gdata, ocsr);
         fusedGatBackwardGradElEr<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, ocsr);
 }
 

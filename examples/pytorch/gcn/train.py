@@ -7,9 +7,9 @@ import torch.nn.functional as F
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
 
-from gcn import GCN
+#from gcn import GCN
 #from gcn_mp import GCN
-#from gcn_spmv import GCN
+from gcn_spmv import GCN, EglGCN
 
 def evaluate(model, features, labels, mask):
     model.eval()
@@ -75,15 +75,24 @@ def main(args):
         norm = norm.cuda()
     g.ndata['norm'] = norm.unsqueeze(1)
 
-    # create GCN model
-    model = GCN(g,
-                in_feats,
-                args.n_hidden,
-                n_classes,
-                args.n_layers,
-                F.relu,
-                args.dropout)
-
+    if args.use_egl:
+        model = EglGCN(g,
+                    in_feats,
+                    args.n_hidden,
+                    n_classes,
+                    args.n_layers,
+                    F.relu,
+                    args.dropout)
+    else:
+        # create GCN model
+        model = GCN(g,
+                    in_feats,
+                    args.n_hidden,
+                    n_classes,
+                    args.n_layers,
+                    F.relu,
+                    args.dropout)
+    
     if cuda:
         model.cuda()
     loss_fcn = torch.nn.CrossEntropyLoss()
@@ -137,6 +146,8 @@ if __name__ == '__main__':
             help="number of hidden gcn layers")
     parser.add_argument("--weight-decay", type=float, default=5e-4,
             help="Weight for L2 loss")
+    parser.add_argument("--use-egl", type=bool, default=False,
+            help="Use egl for training")
     parser.add_argument("--self-loop", action='store_true',
             help="graph self-loop (default=False)")
     parser.set_defaults(self_loop=False)
