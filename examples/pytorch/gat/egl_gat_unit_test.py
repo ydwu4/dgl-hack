@@ -26,8 +26,8 @@ class EglGATConvTest(nn.Module):
         self._out_feats = out_feats
         self.fc = nn.Linear(
             self._in_feats, out_feats * num_heads, bias=False)
-        self.attn_l = nn.Parameter(th.FloatTensor(size=(1, num_heads, out_feats)))
-        self.attn_r = nn.Parameter(th.FloatTensor(size=(1, num_heads, out_feats)))
+        self.attn_l = nn.Parameter(th.FloatTensor(size=(num_heads, out_feats)))
+        self.attn_r = nn.Parameter(th.FloatTensor(size=(num_heads, out_feats)))
         self.feat_drop = nn.Dropout(feat_drop)
         self.attn_drop = nn.Dropout(attn_drop)
         self.leaky_relu = nn.LeakyReLU(negative_slope)

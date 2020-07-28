@@ -77,5 +77,9 @@ class Parser():
             '--final_dropout', type=float, default=0.5,
             help='final layer dropout (default: 0.5)')
 
+        self.parser.add_argument(
+            '--use_egl', type=bool, default=False,
+            help='whether to use egl for training (default: False)'
+        )
         # done
         self.args = self.parser.parse_args()

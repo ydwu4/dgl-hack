@@ -25,8 +25,8 @@ class EglGATConv(nn.Module):
         self._out_feats = out_feats
         self.fc = nn.Linear(
             self._in_feats, out_feats * num_heads, bias=False)
-        self.attn_l = nn.Parameter(th.FloatTensor(size=(1, num_heads, out_feats)))
-        self.attn_r = nn.Parameter(th.FloatTensor(size=(1, num_heads, out_feats)))
+        self.attn_l = nn.Parameter(th.FloatTensor(size=(num_heads, out_feats)))
+        self.attn_r = nn.Parameter(th.FloatTensor(size=(num_heads, out_feats)))
         self.feat_drop = nn.Dropout(feat_drop)
         self.attn_drop = nn.Dropout(attn_drop)
         self.leaky_relu = nn.LeakyReLU(negative_slope)
@@ -50,7 +50,7 @@ class EglGATConv(nn.Module):
         dgl_context = dgl.utils.to_dgl_context(feat.device)
         graph = graph._graph.get_immutable_gidx(dgl_context)
         h_src = h_dst = self.feat_drop(feat)
-        with self.cm.zoomIn(namespace=[self, th], graph=graph, node_feats={'f' : h_src}, edge_feats={'ef': th.rand(10, 1)}) as v:
+        with self.cm.zoomIn(namespace=[self, th], graph=graph, node_feats={'f' : h_src}) as v:
             feat_src = [self.fc(n.f).view(self._num_heads, self._out_feats) for n in v.innbs]
             el = [(nf * self.attn_l).sum(dim=-1, keepdim=True) for nf in feat_src]
             er = (self.fc(v.f).view(self._num_heads, self._out_feats) * self.attn_r).sum(dim=-1, keepdim=True)

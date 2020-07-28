@@ -9,7 +9,7 @@ import torch.optim as optim
 from dgl.data.gindt import GINDataset
 from dataloader import GraphDataLoader, collate
 from parser import Parser
-from gin import GIN
+from gin import GIN, EglGIN
 
 
 def train(args, net, trainloader, optimizer, criterion, epoch):
@@ -92,11 +92,19 @@ def main(args):
         split_name='fold10', fold_idx=args.fold_idx).train_valid_loader()
     # or split_name='rand', split_ratio=0.7
 
-    model = GIN(
-        args.num_layers, args.num_mlp_layers,
-        dataset.dim_nfeats, args.hidden_dim, dataset.gclasses,
-        args.final_dropout, args.learn_eps,
-        args.graph_pooling_type, args.neighbor_pooling_type).to(args.device)
+    if args.use_egl:
+        model = EglGIN(
+            args.num_layers, args.num_mlp_layers,
+            dataset.dim_nfeats, args.hidden_dim, dataset.gclasses,
+            args.final_dropout, args.learn_eps,
+            args.graph_pooling_type, args.neighbor_pooling_type).to(args.device)
+
+    else:
+        model = GIN(
+            args.num_layers, args.num_mlp_layers,
+            dataset.dim_nfeats, args.hidden_dim, dataset.gclasses,
+            args.final_dropout, args.learn_eps,
+            args.graph_pooling_type, args.neighbor_pooling_type).to(args.device)
 
     criterion = nn.CrossEntropyLoss()  # defaul reduce is true
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
