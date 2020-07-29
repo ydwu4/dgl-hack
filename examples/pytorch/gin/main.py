@@ -92,7 +92,7 @@ def main(args):
         split_name='fold10', fold_idx=args.fold_idx).train_valid_loader()
     # or split_name='rand', split_ratio=0.7
 
-    if args.use_egl:
+    if args.use_egl == 1:
         model = EglGIN(
             args.num_layers, args.num_mlp_layers,
             dataset.dim_nfeats, args.hidden_dim, dataset.gclasses,

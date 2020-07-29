@@ -13,6 +13,7 @@ import torch.nn.functional as F
 import dgl
 from dgl.nn.pytorch.conv import GINConv
 from dgl.nn.pytorch.glob import SumPooling, AvgPooling, MaxPooling
+import egl
 from egl import ContextManager
 from dgl.utils import expand_as_pair
 
@@ -241,14 +242,14 @@ class EglGINConv(nn.Module):
             if self.aggregator_type == 'sum':
                 rst = sum([nb.fsrc for nb in v.innbs])
             elif self.aggregator_type == 'mean':
-                raise NotImplementedError('Cannot find aggregator typoe', self.aggregator_type)
+                rst = self.cm.mean([nb.fsrc for nb in v.innbs])
             elif self.aggregator_type == 'max':
-                raise NotImplementedError('Cannot find aggregator typoe', self.aggregator_type)
+                rst = self.cm.max([nb.fsrc for nb in v.innbs])
             else:
                 raise NotImplementedError('Cannot find aggregator typoe', self.aggregator_type)
             # Temp workaround for rst = (1 + self.eps) * v.fdst + rst
             rst = v.fdst + self.eps * v.fdst + rst
-            v.collect_output(rst)
+            self.cm.collect_output(rst)
         rst = self.cm.zoomOut()
         if self.apply_func is not None:
             rst = self.apply_func(rst)

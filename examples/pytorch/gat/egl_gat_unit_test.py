@@ -79,7 +79,7 @@ class EglGATConvTest(nn.Module):
             s = sum(coeff)
             alpha = [c/s for c in coeff]
             rst = sum([ef[0]*ef[1] for ef in zip(alpha, feat_src)])
-            v.collect_output(rst)
+            self.cm.collect_output(rst)
         rst = self.cm.zoomOut()
         grad_out = th.ones_like(rst)
         egl_graer= grad(outputs=rst, inputs=self.cm._executor.ts.tensor_map['v7'], grad_outputs=grad_out, retain_graph=True)

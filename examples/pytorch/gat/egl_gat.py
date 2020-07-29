@@ -58,7 +58,7 @@ class EglGATConv(nn.Module):
             s = sum(coeff)
             alpha = [c/s for c in coeff]
             rst = sum([ef[0]*ef[1] for ef in zip(alpha, feat_src)])
-            v.collect_output(rst)
+            self.cm.collect_output(rst)
         rst = self.cm.zoomOut()
         # residual
         if self.res_fc is not None:

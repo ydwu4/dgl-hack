@@ -98,7 +98,7 @@ class EglGCNLayer(nn.Module):
         with self.cm.zoomIn(namespace=[self, torch], graph=graph, node_feats={'h':h, 'norm':self.norm}) as v:
             h = sum([nb.h*nb.norm for nb in v.innbs])
             h = h * v.norm
-            v.collect_output(h)
+            self.cm.collect_output(h)
         h = self.cm.zoomOut()
         # bias
         if self.bias is not None:
