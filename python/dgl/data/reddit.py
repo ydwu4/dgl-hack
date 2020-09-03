@@ -19,7 +19,7 @@ class RedditDataset(object):
         extract_archive(zip_file_path, extract_dir)
         # graph
         coo_adj = sp.load_npz(os.path.join(extract_dir, "reddit{}_graph.npz".format(self_loop_str)))
-        self.graph = DGLGraph(coo_adj, readonly=True)
+        self.graph = DGLGraph(coo_adj, readonly=False)
         # features and labels
         reddit_data = np.load(os.path.join(extract_dir, "reddit_data.npz"))
         self.features = reddit_data["feature"]
