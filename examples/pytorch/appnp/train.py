@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
 import dgl
-from appnp import APPNP
+from appnp import APPNP, EglAPPNP
 
 
 def evaluate(model, features, labels, mask):
@@ -67,7 +67,8 @@ def main(args):
     g.set_e_initializer(dgl.init.zero_initializer)
 
     # create APPNP model
-    model = APPNP(g,
+    model = EglAPPNP(g,
+    #model = APPNP(g,
                   in_feats,
                   args.hidden_sizes,
                   n_classes,
@@ -88,7 +89,7 @@ def main(args):
 
     # initialize graph
     dur = []
-    for epoch in range(args.n_epochs):
+    for epoch in range(args.num_epochs):
         model.train()
         if epoch >= 3:
             t0 = time.time()
@@ -124,7 +125,7 @@ if __name__ == '__main__':
                         help="gpu")
     parser.add_argument("--lr", type=float, default=1e-2,
                         help="learning rate")
-    parser.add_argument("--n-epochs", type=int, default=200,
+    parser.add_argument("--num-epochs", type=int, default=200,
                         help="number of training epochs")
     parser.add_argument("--hidden_sizes", type=int, nargs='+', default=[64],
                         help="hidden unit sizes for appnp")

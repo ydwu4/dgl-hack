@@ -157,3 +157,5 @@ cscope.*
 
 # asv
 .asv
+egl_kernel.*
+*.svg
