@@ -152,6 +152,12 @@ void FusedGatKernelImpl(
     runtime::NDArray feat_src, runtime::NDArray el, runtime::NDArray er, 
     runtime::NDArray sum, runtime::NDArray exp,
     runtime::NDArray ret, float leaky_relu_slope);
+  
+void NbAccessImpl(
+    const CSRWrapper& graph,
+    runtime::NDArray feat,
+    runtime::NDArray node_map);
+
 
 void BackwardFusedGatKernelImpl(
     const CSRWrapper& graph,

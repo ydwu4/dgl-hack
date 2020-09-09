@@ -16,6 +16,16 @@ using dgl::runtime::NDArray;
 namespace dgl {
 namespace kernel {
 
+#define cudaCheck(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
+
 template <typename Idx>
 std::string print_csr(const minigun::Csr<Idx>& csr);
 
@@ -410,6 +420,330 @@ void FusedGatKernelImpl(
         //LOG(INFO) << "kernel2 blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
         gatSumProdZipDivKernel<<<nblks2, nthrs2, 0, thr_entry->stream>>>(gdata, csr);
 }
+
+template <typename Idx>
+__device__ __forceinline__ Idx BinarySearchSrc(const minigun::IntArray1D<Idx>& array, Idx eid) {
+  Idx lo = 0, hi = array.length - 1;
+  while (lo < hi) {
+    Idx mid = (lo + hi) >> 1;
+    if (__ldg(array.data + mid) <= eid) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  // INVARIANT: lo == hi
+  if (__ldg(array.data + hi) == eid) {
+    return hi;
+  } else {
+    return hi - 1;
+  }
+}
+
+template <typename Idx, typename DType>
+// No need to do special pre-processing
+__global__ void LoadBalanceNbAccessKernel(minigun::Csr<Idx> csr, DType* feat, Idx feat_len, Idx num_nodes, Idx num_edges) {
+    Idx ty = blockIdx.y * blockDim.y + threadIdx.y;
+    Idx stride_y = blockDim.y * gridDim.y;
+    Idx eid = ty;
+    while (eid < num_edges) {
+        Idx src = BinarySearchSrc<Idx>(csr.row_offsets, eid);
+        Idx dst = __ldg(csr.column_indices.data + eid);
+        Idx tx = blockIdx.x * blockDim.x + threadIdx.x;
+        const Idx stride_x = blockDim.x * gridDim.x;
+        DType* srcoff = feat + src * feat_len;
+        DType* dstoff = feat + dst * feat_len;
+        while (tx < feat_len) {
+            DType tmp_src = __ldg(srcoff + tx);
+            //DType tmp_dst = __ldg(dstoff + tx);
+            tx += stride_x;
+        }
+        eid += stride_y;
+    }
+}
+template<typename Idx, typename DType>
+__global__ void FeatureAdaptiveNbAccessKernel(minigun::Csr<Idx> csr, DType* feat, Idx feat_len, Idx num_nodes, Idx num_edges) {
+    //extern __shared__ DType dst_feat[];
+    Idx dst_id = blockIdx.x;
+    Idx beg = __ldg(csr.row_offsets.data + dst_id);
+    Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
+    Idx tx = threadIdx.x;
+    for(; tx<feat_len; tx += blockDim.x) {
+        //dst_feat[tx] = __ldg(feat + dst_id * feat_len + tx);
+        //__syncthreads();
+        for(; beg < end; ++beg) {
+            Idx src_id = __ldg(csr.column_indices.data + beg);
+            DType src_feat = __ldg(feat + src_id * feat_len + tx);
+        }
+    }
+}
+template<typename Idx, typename DType>
+__global__ void FeatureAdaptiveNbAccessKernelWithAtomic(minigun::Csr<Idx> csr, DType* feat, Idx feat_len, Idx num_nodes, Idx num_edges, Idx* blk_id, Idx* sorted_node_map) {
+    //extern __shared__ DType dst_feat[];
+    __shared__ Idx dynamic_block_id[1];
+    if (threadIdx.x == 0) {
+        dynamic_block_id[0] = atomicAdd(blk_id, 1);
+    }
+    __syncthreads();
+    Idx dst_id = blockIdx.x;
+    Idx beg = __ldg(csr.row_offsets.data + dst_id);
+    Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
+    Idx tx = threadIdx.x;
+    for(; tx<feat_len; tx += blockDim.x) {
+        //dst_feat[threadIdx.x] = __ldg(feat + dst_id * feat_len + tx);
+        //__syncthreads();
+        for(; beg < end; ++beg) {
+            Idx src_id = __ldg(csr.column_indices.data + beg);
+            DType src_feat = __ldg(feat + src_id * feat_len + tx);
+        }
+    }
+}
+
+template<typename Idx, typename DType>
+__global__ void FeatureAdaptiveNbAccessKernelWithDynamicBlkId(minigun::Csr<Idx> csr, DType* feat, Idx feat_len, Idx num_nodes, Idx num_edges, Idx* blk_id, Idx* sorted_node_map) {
+    //extern __shared__ DType dst_feat[];
+    __shared__ Idx dynamic_block_id[1];
+    if (threadIdx.x == 0) {
+        dynamic_block_id[0] = atomicAdd(blk_id, 1);
+    }
+    __syncthreads();
+    if (dynamic_block_id[0] < num_nodes) {
+        Idx dst_id = __ldg(sorted_node_map + dynamic_block_id[0]);
+        Idx beg = __ldg(csr.row_offsets.data + dst_id);
+        Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
+        Idx tx = threadIdx.x;
+        for(; tx<feat_len; tx += blockDim.x) {
+            //dst_feat[threadIdx.x] = __ldg(feat + dst_id * feat_len + tx);
+            //__syncthreads();
+            for(; beg < end; ++beg) {
+                Idx src_id = __ldg(csr.column_indices.data + beg);
+                DType src_feat = __ldg(feat + src_id * feat_len + tx);
+            }
+        }
+    }
+}
+
+template<typename Idx, typename DType>
+__global__ void FeatureAdaptiveNbAccessKernelWithDynamicBlkIdNoAtomic(minigun::Csr<Idx> csr, DType* feat, Idx feat_len, Idx num_nodes, Idx num_edges, Idx* blk_id, Idx* sorted_node_map) {
+    if (blockIdx.x < num_nodes) {
+        Idx dst_id = __ldg(sorted_node_map + blockIdx.x);
+        Idx beg = __ldg(csr.row_offsets.data + dst_id);
+        Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
+        Idx tx = threadIdx.x;
+        for(; tx<feat_len; tx += blockDim.x) {
+            for(; beg < end; ++beg) {
+                Idx src_id = __ldg(csr.column_indices.data + beg);
+                DType src_feat = __ldg(feat + src_id * feat_len + tx);
+            }
+        }
+    }
+}
+
+template<typename Idx, typename DType>
+__global__ void FeatureAdaptiveNbAccessKernelWithDynamicBlkIdNoAtomicSharding(minigun::Csr<Idx> csr,
+     DType* feat,
+     Idx feat_len,
+     Idx num_nodes,
+     Idx num_edges, 
+     Idx nodes_per_blk, 
+     Idx new_warp_size,
+     Idx* sorted_node_map) {
+    Idx new_warp_id = threadIdx.x / new_warp_size; 
+    Idx tx = threadIdx.x % new_warp_size;
+    Idx start_off = blockIdx.x * nodes_per_blk;
+    if (start_off + new_warp_id < num_nodes) {
+        Idx dst_id = __ldg(sorted_node_map + start_off + new_warp_id);
+        Idx beg = __ldg(csr.row_offsets.data + dst_id);
+        Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
+        for(; tx<feat_len; tx += new_warp_size) {
+            for(; beg<end; ++beg) {
+                Idx src_id = __ldg(csr.column_indices.data + beg);
+                DType src_feat = __ldg(feat + src_id * feat_len + tx);
+            }
+        }
+    }
+}
+
+template<typename Idx>
+int launch_lb(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Idx num_nodes, Idx num_edges) {
+    const int MAX_NTHREADS = 1024;
+    const int MAX_NBLKS= 65535;
+    const int nt = utils::FindNumThreads(feat_len, 64);
+    const int ty = MAX_NTHREADS / nt;
+    const dim3 nthrs(nt, ty);
+
+    const Idx M = num_edges;
+    const int by = std::min((M + ty - 1) / ty, static_cast<Idx>(MAX_NBLKS));
+    const int data_num_blocks = (feat_len + (nt * 2) - 1) / (nt * 2);
+    const dim3 nblks(data_num_blocks, by);
+
+    auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+    auto beg = std::chrono::steady_clock::now();
+    LoadBalanceNbAccessKernel<Idx, float>
+        <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges);
+    cudaDeviceSynchronize();
+    auto end = std::chrono::steady_clock::now();
+
+    int ret = std::chrono::duration_cast<std::chrono::microseconds>(end - beg).count();
+    return ret;
+}
+
+template<typename Idx>
+int launch_fa_small_feature(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Idx num_nodes, Idx num_edges, int mode, Idx* node_map) {
+    const int MIN_NTHREADS = 64;
+    auto beg = std::chrono::steady_clock::now();
+    auto end = std::chrono::steady_clock::now();
+    auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+    const int nthrs = MIN_NTHREADS;
+    const int new_warp_size = max(1, utils::FindNumThreads(feat_len, nthrs)); // Will be 32/16/8/4/2/1
+    const int nodes_per_blk = max(nthrs/new_warp_size, 1);
+    const int nblks = (num_nodes + nodes_per_blk -1)/nodes_per_blk;
+    //LOG(INFO) << "Launch with nblks:" << nblks << " with nthrs:" << nthrs << " new_warp_size:" <<new_warp_size << " nodes per blk:" << nodes_per_blk;
+    if (mode == 2) {
+        beg = std::chrono::steady_clock::now();
+        //FeatureAdaptiveNbAccessKernelWithDynamicBlkIdSharding<Idx, float>
+        //    <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, nodes_per_blk, new_warp_size, node_map);
+    } else if (mode == 3) {
+        beg = std::chrono::steady_clock::now();
+        FeatureAdaptiveNbAccessKernelWithDynamicBlkIdNoAtomicSharding<Idx, float>
+            <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, nodes_per_blk, new_warp_size, node_map);
+    }
+    cudaDeviceSynchronize();
+    end = std::chrono::steady_clock::now();
+    return  std::chrono::duration_cast<std::chrono::microseconds>(end - beg).count();
+}
+
+template<typename Idx>
+int launch_fa_large_feature(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Idx num_nodes, Idx num_edges, int mode, Idx* node_map) {
+    const int MAX_NTHREADS = 256;
+    const int MIN_NTHREADS = 64;
+    auto beg = std::chrono::steady_clock::now();
+    auto end = std::chrono::steady_clock::now();
+    auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+    const int nblks = num_nodes;
+    const int nthrs = max(MIN_NTHREADS, utils::FindNumThreads(feat_len, MAX_NTHREADS));
+
+    if (mode == 0) {
+        beg = std::chrono::steady_clock::now();
+        FeatureAdaptiveNbAccessKernel<Idx, float>
+            <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges);
+    } else if (mode == 1) {
+        if (node_map == nullptr) {
+            LOG(FATAL) << "Mode 1 requires node map to be non-empty";
+        }
+        Idx* blk_id_ptr; 
+        cudaCheck(cudaMalloc(&blk_id_ptr, sizeof(Idx)));
+        cudaCheck(cudaMemset(blk_id_ptr, 0, sizeof(Idx)));
+        cudaDeviceSynchronize();
+        const int shared_memory_size_bytes = sizeof(Idx);
+
+        beg = std::chrono::steady_clock::now();
+        FeatureAdaptiveNbAccessKernelWithAtomic<Idx, float>
+            <<<nblks, nthrs, shared_memory_size_bytes , thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, blk_id_ptr, node_map);
+    } else if (mode == 2) {
+        if (node_map == nullptr) {
+            LOG(FATAL) << "Mode 2 requires node map to be non-empty";
+        }
+        Idx* blk_id_ptr; 
+        cudaCheck(cudaMalloc(&blk_id_ptr, sizeof(Idx)));
+        cudaCheck(cudaMemset(blk_id_ptr, 0, sizeof(Idx)));
+        cudaDeviceSynchronize();
+        const int shared_memory_size_bytes = sizeof(Idx);
+
+        beg = std::chrono::steady_clock::now();
+        FeatureAdaptiveNbAccessKernelWithDynamicBlkId<Idx, float>
+            <<<nblks, nthrs, shared_memory_size_bytes , thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, blk_id_ptr, node_map);
+    } else if (mode == 3) {
+        beg = std::chrono::steady_clock::now();
+        FeatureAdaptiveNbAccessKernelWithDynamicBlkIdNoAtomic<Idx, float>
+            <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, nullptr, node_map);
+    }
+    else {
+        LOG(FATAL) << "Unrecognized mode " << mode;
+    }
+    cudaDeviceSynchronize();
+    end = std::chrono::steady_clock::now();
+    return  std::chrono::duration_cast<std::chrono::microseconds>(end - beg).count();
+}
+
+template<typename Idx>
+int launch_fa(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Idx num_nodes, Idx num_edges, int mode=0, Idx* node_map=nullptr) {
+    int ret = 0; 
+    if (feat_len >= 64) {
+        ret = launch_fa_large_feature(csr, feat, feat_len, num_nodes, num_edges, mode, node_map);
+    } else {
+        if (mode < 3) {
+            return -1;
+        } else {
+            ret = launch_fa_small_feature(csr, feat, feat_len, num_nodes, num_edges, mode, node_map);
+        }
+    }
+    return ret;
+}
+
+void NbAccessImpl(
+    const CSRWrapper& graph,
+    runtime::NDArray feat,
+    runtime::NDArray node_map){
+        int32_t feat_len = utils::ComputeXLength(feat);
+        float* feat_ptr = static_cast<float*>(feat->data);
+        auto incsr = graph.GetInCSRMatrix();
+        minigun::Csr<int32_t> csr = utils::CreateCsr<int32_t>(incsr.indptr, incsr.indices);
+        int32_t num_nodes = csr.row_offsets.length;
+        int32_t num_edges = csr.column_indices.length;
+        LOG(INFO)<<"feat_len:" << feat_len <<" num_nodes:" << num_nodes << " num_edges:" << num_edges;
+        float avg = 0.;
+        int times = 15;
+        int warm_up_times = 5;
+        for (int i=0; i<times; i++){
+            auto ret =  launch_lb<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges);
+            if (i >= warm_up_times) {
+                avg += ret;
+            }
+        }
+        LOG(INFO) << "On average LB takes: " << avg/(times-warm_up_times)  << " micro secs";
+        avg = 0.;
+        for (int i=0; i<times; i++){
+            auto ret =  launch_fa<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 0);
+            if (i >= warm_up_times) {
+                avg += ret;
+            }
+        }
+        LOG(INFO) << "On average FA static blk id takes: " << avg/(times-warm_up_times)  << " micro secs";
+        avg = 0.;
+        for (int i=0; i<times; i++){
+            int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
+            // Reset the number of nodes
+            num_nodes = node_map.GetSize()/sizeof(int32_t);
+            auto ret =  launch_fa<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 1, node_map_ptr);
+            if (i >= warm_up_times) {
+                avg += ret;
+            }
+        }
+        LOG(INFO) << "On average FA with atomic takes: " << avg/(times-warm_up_times)  << " micro secs";
+        avg = 0.;
+        for (int i=0; i<times; i++){
+            int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
+            // Reset the number of nodes
+            num_nodes = node_map.GetSize()/sizeof(int32_t);
+            auto ret =  launch_fa<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 2, node_map_ptr);
+            if (i >= warm_up_times) {
+                avg += ret;
+            }
+        }
+        LOG(INFO) << "On average FA with dynamic blk id takes: " << avg/(times-warm_up_times)  << " micro secs";
+        avg = 0.;
+        for (int i=0; i<times; i++){
+            int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
+            // Reset the number of nodes
+            num_nodes = node_map.GetSize()/sizeof(int32_t);
+            auto ret =  launch_fa<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 3, node_map_ptr);
+            if (i >= warm_up_times) {
+                avg += ret;
+            }
+        }
+        LOG(INFO) << "On average FA with dynamic blk but no atomic takes: " << avg/(times-warm_up_times)  << " micro secs";
+    }
 
 void BackwardFusedGatKernelImpl(
     const CSRWrapper& graph,

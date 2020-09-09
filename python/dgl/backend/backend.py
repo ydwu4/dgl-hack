@@ -1250,6 +1250,9 @@ def fused_gat(graph, feat_src, el, er, sum, exp, ret, slope):
     """
     pass
 
+def nb_access_bench(graph, feat, node_map):
+    pass
+
 def run_egl(exectuor):
     '''
     exec_context : 

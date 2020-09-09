@@ -153,6 +153,9 @@ def fused_gat_kernel(graph, feat_src, el, er, s, exp, ret, slope):
 def backward_fused_gat(graph, feat_src, el, er, s, exp, ret, grad_out, grad_feat_src, grad_el, grad_er, slope):
     _CAPI_DGLKernelBackwardFusedGat(graph, feat_src, el, er, s, exp, ret, grad_out, grad_feat_src, grad_el, grad_er, slope)
 
+def nb_access(graph, feat, node_map):
+    _CAPI_DGLNbAccess(graph, feat, node_map)
+
 # pylint: disable=invalid-name
 def backward_lhs_binary_op_reduce(
         reducer, op, G,

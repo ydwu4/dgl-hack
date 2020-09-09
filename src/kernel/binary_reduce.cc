@@ -395,6 +395,19 @@ DGL_REGISTER_GLOBAL("kernel._CAPI_DGLFusedGatKernel")
   FusedGatKernelImpl(wrapper, feat_src, el, er, sum, exp, ret, slope);
 });
 
+DGL_REGISTER_GLOBAL("kernel._CAPI_DGLNbAccess")
+.set_body([] (DGLArgs args, DGLRetValue* rv) {
+  GraphRef g = args[0];
+  auto igptr = std::dynamic_pointer_cast<ImmutableGraph>(g.sptr());
+  CHECK_NOTNULL(igptr);
+  ImmutableGraphCSRWrapper wrapper(igptr.get());
+  NDArray feat_src = args[1];
+  NDArray node_map = args[2];
+  const auto& ctx = wrapper.Context();
+  CheckCtx(ctx, {feat_src, node_map}, {"feat_src", "node_map"});
+  NbAccessImpl(wrapper, feat_src, node_map);
+});
+
 void BackwardLhsBinaryOpReduce(
     const std::string& reducer,
     const std::string& op,
