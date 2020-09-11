@@ -403,9 +403,10 @@ DGL_REGISTER_GLOBAL("kernel._CAPI_DGLNbAccess")
   ImmutableGraphCSRWrapper wrapper(igptr.get());
   NDArray feat_src = args[1];
   NDArray node_map = args[2];
+  NDArray deg_inc_node_map = args[3];
   const auto& ctx = wrapper.Context();
-  CheckCtx(ctx, {feat_src, node_map}, {"feat_src", "node_map"});
-  NbAccessImpl(wrapper, feat_src, node_map);
+  CheckCtx(ctx, {feat_src, node_map, deg_inc_node_map}, {"feat_src", "node_map", "deg_inc_node_map"});
+  NbAccessImpl(wrapper, feat_src, node_map, deg_inc_node_map);
 });
 
 void BackwardLhsBinaryOpReduce(

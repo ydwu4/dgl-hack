@@ -421,16 +421,17 @@ def fused_gat(graph, feat_src, el, er, slope):
 
 class NbAccess(th.autograd.Function):
     @staticmethod
-    def forward(ctx, graph, feat, node_map):
+    def forward(ctx, graph, feat, node_map, deg_inc_node_map):
         feat_nd = zerocopy_to_dgl_ndarray(feat)
         node_map_nd = zerocopy_to_dgl_ndarray(node_map)
+        deg_inc_node_map_nd = zerocopy_to_dgl_ndarray(deg_inc_node_map)
         ctx.backward_cache = graph, feat, node_map
-        K.nb_access(graph, feat_nd, node_map_nd)
+        K.nb_access(graph, feat_nd, node_map_nd, deg_inc_node_map_nd)
         return feat
 
-def nb_access_bench(graph, feat, node_map):
+def nb_access_bench(graph, feat, node_map, deg_inc_node_map):
     g = graph._graph.get_immutable_gidx(utils.to_dgl_context(context(feat)))
-    return  NbAccess.apply(g, feat, node_map)
+    return  NbAccess.apply(g, feat, node_map, deg_inc_node_map)
 
 class KernelWrapper(th.autograd.Function):
     @staticmethod

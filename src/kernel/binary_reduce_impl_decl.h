@@ -156,7 +156,8 @@ void FusedGatKernelImpl(
 void NbAccessImpl(
     const CSRWrapper& graph,
     runtime::NDArray feat,
-    runtime::NDArray node_map);
+    runtime::NDArray node_map,
+    runtime::NDArray deg_inc_node_map);
 
 
 void BackwardFusedGatKernelImpl(
