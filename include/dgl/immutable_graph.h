@@ -64,6 +64,14 @@ class CSR : public GraphInterface {
     LOG(FATAL) << "CSR graph does not allow mutation.";
   }
 
+  void AddEdgesWithType(IdArray src_ids, IdArray dst_ids, IdArray type_ids) override {
+    LOG(FATAL) << "CSR graph does not allow mutation.";
+  }
+
+  std::vector<IdArray> GetCsrSortedByEdgeType(bool transpose) override{
+    LOG(FATAL) << "Not implemented yet";
+  }
+
   void Clear() override {
     LOG(FATAL) << "CSR graph does not allow mutation.";
   }
@@ -280,6 +288,14 @@ class COO : public GraphInterface {
 
   void AddEdges(IdArray src_ids, IdArray dst_ids) override {
     LOG(FATAL) << "CSR graph does not allow mutation.";
+  }
+
+  void AddEdgesWithType(IdArray src_ids, IdArray dst_ids, IdArray type_ids) override {
+    LOG(FATAL) << "CSR graph does not allow mutation.";
+  }
+
+  std::vector<IdArray> GetCsrSortedByEdgeType(bool transpose) override{
+    LOG(FATAL) << "Not implemented yet";
   }
 
   void Clear() override {
@@ -570,6 +586,14 @@ class ImmutableGraph: public GraphInterface {
 
   void AddEdges(IdArray src_ids, IdArray dst_ids) override {
     LOG(FATAL) << "AddEdges isn't supported in ImmutableGraph";
+  }
+
+  void AddEdgesWithType(IdArray src_ids, IdArray dst_ids, IdArray type_ids) override {
+    LOG(FATAL) << "AddEdges isn't supported in ImmutableGraph";
+  }
+
+  std::vector<IdArray> GetCsrSortedByEdgeType(bool transpose) override {
+    LOG(FATAL) << "Not implemented yet";
   }
 
   void Clear() override {

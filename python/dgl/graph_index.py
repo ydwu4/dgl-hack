@@ -100,6 +100,22 @@ class GraphIndex(ObjectBase):
         _CAPI_DGLGraphAddEdges(self, u_array, v_array)
         self.clear_cache()
 
+    def add_edges_with_type(self, u, v, e):
+        """Add many edges.
+
+        Parameters
+        ----------
+        u : utils.Index
+            The src nodes.
+        v : utils.Index
+            The dst nodes.
+        """
+        u_array = u.todgltensor()
+        v_array = v.todgltensor()
+        etype_array = e.todgltensor()
+        _CAPI_DGLGraphAddEdgesWithType(self, u_array, v_array, etype_array)
+        self.clear_cache()
+
     def clear(self):
         """Clear the graph."""
         _CAPI_DGLGraphClear(self)
@@ -687,11 +703,16 @@ class GraphIndex(ObjectBase):
     def get_in_csr(self):
         csr = _CAPI_DGLGraphGetAdj(self, False, 'csr')
         return csr
+    
+    def get_in_csr_sorted_by_edge_type(self):
+        return _CAPI_DGLGraphGetCsrSortedByEdgeType(self, False)
 
     def get_out_csr(self):
         csr = _CAPI_DGLGraphGetAdj(self, True, 'csr')
         return csr
 
+    def get_out_csr_sorted_by_edge_type(self):
+        return _CAPI_DGLGraphGetCsrSortedByEdgeType(self, True)
 
     def adjacency_matrix(self, transpose, ctx):
         """Return the adjacency matrix representation of this graph.

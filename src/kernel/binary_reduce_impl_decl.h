@@ -158,6 +158,34 @@ void NbAccessImpl(
     runtime::NDArray feat,
     runtime::NDArray node_map,
     runtime::NDArray deg_inc_node_map);
+  
+void RgcnLayer0Impl(
+    GraphRef graph,
+    runtime::NDArray weight,
+    runtime::NDArray norm,
+    runtime::NDArray ret);
+
+void RgcnLayer1Impl(
+    GraphRef graph,
+    runtime::NDArray hidden,
+    runtime::NDArray weight,
+    runtime::NDArray norm,
+    runtime::NDArray ret);
+
+void RgcnLayer0BackwardImpl(
+    GraphRef graph,
+    runtime::NDArray grad_out,
+    runtime::NDArray norm,
+    runtime::NDArray grad_weight);
+
+void RgcnLayer1BackwardImpl(
+    GraphRef graph,
+    runtime::NDArray hidden,
+    runtime::NDArray weight,
+    runtime::NDArray norm,
+    runtime::NDArray grad_out,
+    runtime::NDArray grad_hidden,
+    runtime::NDArray grad_weight);
 
 
 void BackwardFusedGatKernelImpl(

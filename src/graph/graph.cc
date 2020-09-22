@@ -83,8 +83,28 @@ void Graph::AddEdge(dgl_id_t src, dgl_id_t dst) {
 
   adjlist_[src].succ.push_back(dst);
   adjlist_[src].edge_id.push_back(eid);
+  adjlist_[src].type_id.push_back(-1);
   reverse_adjlist_[dst].succ.push_back(src);
   reverse_adjlist_[dst].edge_id.push_back(eid);
+  reverse_adjlist_[dst].type_id.push_back(-1);
+
+  all_edges_src_.push_back(src);
+  all_edges_dst_.push_back(dst);
+}
+
+void Graph::AddEdge(dgl_id_t src, dgl_id_t dst, dgl_id_t type) {
+  CHECK(!read_only_) << "Graph is read-only. Mutations are not allowed.";
+  CHECK(HasVertex(src) && HasVertex(dst))
+    << "Invalid vertices: src=" << src << " dst=" << dst;
+
+  dgl_id_t eid = num_edges_++;
+
+  adjlist_[src].succ.push_back(dst);
+  adjlist_[src].edge_id.push_back(eid);
+  adjlist_[src].type_id.push_back(type);
+  reverse_adjlist_[dst].succ.push_back(src);
+  reverse_adjlist_[dst].edge_id.push_back(eid);
+  reverse_adjlist_[dst].type_id.push_back(type);
 
   all_edges_src_.push_back(src);
   all_edges_dst_.push_back(dst);
@@ -113,6 +133,36 @@ void Graph::AddEdges(IdArray src_ids, IdArray dst_ids) {
     CHECK(srclen == dstlen) << "Invalid src and dst id array.";
     for (int64_t i = 0; i < srclen; ++i) {
       AddEdge(src_data[i], dst_data[i]);
+    }
+  }
+}
+
+void Graph::AddEdgesWithType(IdArray src_ids, IdArray dst_ids, IdArray type_ids) {
+  CHECK(!read_only_) << "Graph is read-only. Mutations are not allowed.";
+  CHECK(aten::IsValidIdArray(src_ids)) << "Invalid src id array.";
+  CHECK(aten::IsValidIdArray(dst_ids)) << "Invalid dst id array.";
+  CHECK(aten::IsValidIdArray(type_ids)) << "Invalid dst id array.";
+  const auto srclen = src_ids->shape[0];
+  const auto dstlen = dst_ids->shape[0];
+  const auto typelen = dst_ids->shape[0];
+  const int64_t* src_data = static_cast<int64_t*>(src_ids->data);
+  const int64_t* dst_data = static_cast<int64_t*>(dst_ids->data);
+  const int64_t* type_data = static_cast<int64_t*>(type_ids->data);
+  if (srclen == 1) {
+    // one-many
+    for (int64_t i = 0; i < dstlen; ++i) {
+      AddEdge(src_data[0], dst_data[i], type_data[i]);
+    }
+  } else if (dstlen == 1) {
+    // many-one
+    for (int64_t i = 0; i < srclen; ++i) {
+      AddEdge(src_data[i], dst_data[0], type_data[i]);
+    }
+  } else {
+    // many-many
+    CHECK(srclen == dstlen) << "Invalid src and dst id array.";
+    for (int64_t i = 0; i < srclen; ++i) {
+      AddEdge(src_data[i], dst_data[i], type_data[i]);
     }
   }
 }
@@ -609,6 +659,89 @@ std::vector<IdArray> Graph::GetAdj(bool transpose, const std::string &fmt) const
     LOG(FATAL) << "unsupported format";
     return std::vector<IdArray>();
   }
+}
+
+std::vector<std::vector<dgl_id_t>> zip3(const std::vector<dgl_id_t>& a, const std::vector<dgl_id_t>& b, const std::vector<dgl_id_t>& c) {
+  CHECK(a.size() == b.size());
+  CHECK(a.size() == c.size());
+  std::vector<std::vector<dgl_id_t>> ret(a.size());
+  for(size_t i=0; i<a.size(); ++i) {
+    ret[i].push_back(a[i]);
+    ret[i].push_back(b[i]);
+    ret[i].push_back(c[i]);
+  }
+  return ret;
+}
+
+std::vector<std::vector<dgl_id_t>> unzip(const std::vector<std::vector<dgl_id_t>>& zipped) {
+  if (zipped.size() == 0) {
+    return std::vector<std::vector<dgl_id_t>>();
+  } 
+  int dims = zipped[0].size();
+  std::vector<std::vector<dgl_id_t>> ret(dims);
+  for (const auto& ele : zipped) {
+    for (int i=0; i<dims; i++){
+      ret[i].push_back(ele[i]);
+    }
+  }
+  return ret;
+}
+
+std::vector<IdArray> Graph::GetCsrSortedByEdgeType(bool transpose) {
+  int flag = int(transpose);
+  if (cached_[flag].size() == 0) {
+    LOG(INFO) << "Here in graph get csr sorted by edge type out_csr?" <<transpose;
+    uint64_t num_edges = NumEdges();
+    uint64_t num_nodes = NumVertices();
+    IdArray indptr = IdArray::Empty(
+        {static_cast<int64_t>(num_nodes) + 1},
+        DLDataType{kDLInt, 64, 1},
+        DLContext{kDLCPU, 0});
+    IdArray indices = IdArray::Empty(
+        {static_cast<int64_t>(num_edges)},
+        DLDataType{kDLInt, 64, 1},
+        DLContext{kDLCPU, 0});
+    IdArray eid = IdArray::Empty(
+        {static_cast<int64_t>(num_edges)},
+        DLDataType{kDLInt, 64, 1},
+        DLContext{kDLCPU, 0});
+    IdArray type_ids = IdArray::Empty(
+        {static_cast<int64_t>(num_edges)},
+        DLDataType{kDLInt, 64, 1},
+        DLContext{kDLCPU, 0});
+    int64_t *indptr_data = static_cast<int64_t*>(indptr->data);
+    int64_t *indices_data = static_cast<int64_t*>(indices->data);
+    int64_t *eid_data = static_cast<int64_t*>(eid->data);
+    int64_t *type_id_data = static_cast<int64_t*>(type_ids->data);
+    const AdjacencyList *adjlist;
+    if (transpose) {
+      // Out-edges.
+      adjlist = &adjlist_;
+    } else {
+      // In-edges.
+      adjlist = &reverse_adjlist_;
+    }
+    indptr_data[0] = 0;
+    for (size_t i = 0; i < adjlist->size(); i++) {
+      indptr_data[i+1] = indptr_data[i] + adjlist->at(i).succ.size();
+      auto zipped = zip3(adjlist->at(i).succ, adjlist->at(i).edge_id, adjlist->at(i).type_id);
+      if (zipped.size() > 0) {
+        std::sort(zipped.begin(), zipped.end(), 
+          [](const std::vector<dgl_id_t>& a, const std::vector<dgl_id_t> b) {
+            return a[2] < b[2];
+        });
+        auto unzipped = unzip(zipped);
+        std::copy(unzipped[0].begin(), unzipped[0].end(), indices_data + indptr_data[i]);
+        std::copy(unzipped[1].begin(), unzipped[1].end(), eid_data + indptr_data[i]);
+        std::copy(unzipped[2].begin(), unzipped[2].end(), type_id_data + indptr_data[i]);
+      }
+    }
+    cached_[flag] = std::vector<IdArray>{aten::AsNumBits(indptr,32).CopyTo({kDLGPU, 0}), 
+        aten::AsNumBits(indices,32).CopyTo({kDLGPU, 0}), 
+        aten::AsNumBits(eid,32).CopyTo({kDLGPU, 0}), 
+        aten::AsNumBits(type_ids, 32).CopyTo({kDLGPU, 0})};
+  }
+  return cached_[flag];
 }
 
 }  // namespace dgl

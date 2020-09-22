@@ -825,6 +825,300 @@ void NbAccessImpl(
         }
     }
 
+template<typename Idx>
+void printNDArray(const runtime::NDArray& arr, std::string arr_name = "arr") {
+    auto len = arr->shape[0];
+    auto arr_data = static_cast<Idx*> (arr->data);
+    std::string print_str;
+    for (int i=0; i<len; i++){
+        print_str += std::to_string(arr_data[i]) + " ";
+    }
+    LOG(INFO) << arr_name << ":\n" << print_str;
+}
+
+template<typename Idx, typename DType>
+__global__ void RgcnLayer0KernelImpl(Idx* ranges, Idx* src_ids, Idx* eids, Idx* types, DType* weight, DType* norm, DType* ret, Idx num_nodes, Idx feat_len, Idx ntypes) {
+    if (blockIdx.x < num_nodes) {
+        Idx beg = __ldg(ranges + blockIdx.x);
+        Idx end = __ldg(ranges + blockIdx.x + 1);
+        Idx tx = threadIdx.x;
+        for (;tx<feat_len; tx += blockDim.x) {
+            DType agg_val = 0.;
+            for(;beg<end;beg++) {
+                Idx src_id = __ldg(src_ids + beg);
+                Idx eid = __ldg(eids + beg);
+                Idx type_id = __ldg(types + beg);
+                DType w = __ldg(weight + src_id*ntypes*feat_len + type_id*feat_len + tx);
+                DType n = __ldg(norm + eid);
+                agg_val += w * n;
+                //printf("w:%f norm:%f agg_val:%f\n", w, n, agg_val);
+            }
+            ret[blockIdx.x*feat_len + tx] = agg_val;
+        }
+    }
+}
+
+void print_dims(const runtime::NDArray& arr) {
+    std::string print_str;
+    for(int i=0; i<arr->ndim; ++i) {
+        print_str +=  std::to_string(arr->shape[i]) + " ";
+    }
+    LOG(INFO) << print_str; 
+}
+
+void RgcnLayer0Impl(
+    GraphRef graph,
+    runtime::NDArray weight,
+    runtime::NDArray norm,
+    runtime::NDArray ret){
+        //LOG(INFO) << "Calling implementation of rgn layer 0 forward";
+        typedef int32_t Idx;
+        typedef float DType;
+        auto csr = graph->GetCsrSortedByEdgeType(false);
+        auto ranges = csr[0];
+        auto ids = csr[1];
+        auto eids = csr[2];
+        auto type_ids = csr[3];
+        auto range_data = static_cast<Idx*> (ranges->data);
+        auto ids_data = static_cast<Idx*> (ids->data);
+        auto eids_data = static_cast<Idx*> (eids->data);
+        auto typeids_data = static_cast<Idx*> (type_ids->data);
+        auto weight_data = static_cast<DType*> (weight->data);
+        auto norm_data = static_cast<DType*> (norm->data);
+        auto ret_data = static_cast<DType*> (ret->data);
+        //print_dims(weight);
+        //print_dims(norm);
+        //print_dims(ret);
+        Idx num_nodes = ranges->shape[0] - 1;
+        Idx num_edges = eids->shape[0];
+        Idx ntypes = weight->shape[1];
+        Idx feat_len = weight->shape[2];
+        //LOG(INFO) << "num edges:" << num_edges << " num nodes:" <<num_nodes;  
+        int nblks = num_nodes;
+        int nthrs = feat_len;
+        auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+        RgcnLayer0KernelImpl<Idx, DType><<<nblks, nthrs, 0, thr_entry->stream>>>
+            (range_data, ids_data, eids_data, typeids_data, weight_data, norm_data, ret_data, num_nodes, feat_len, ntypes);
+        //printNDArray<Idx>(ranges, "range");
+        //printNDArray<Idx>(ids, "ids");
+        //printNDArray<Idx>(eids, "eids");
+        //printNDArray<Idx>(type_ids, "type_ids");
+    }
+
+template<typename Idx, typename DType>
+__global__ void RgcnLayer0BackwardKernelImpl(Idx* ranges, 
+  Idx* dst_ids, 
+  Idx* eids, 
+  Idx* types, 
+  DType* grad_out, 
+  DType* norm, 
+  DType* grad_weight, 
+  Idx num_nodes, 
+  Idx feat_len, 
+  Idx ntypes) {
+    if (blockIdx.x < num_nodes) {
+        Idx beg = __ldg(ranges + blockIdx.x);
+        Idx end = __ldg(ranges + blockIdx.x + 1);
+        Idx tx = threadIdx.x;
+        for (;tx<feat_len; tx += blockDim.x) {
+            for(;beg<end;beg++) {
+                Idx dst_id = __ldg(dst_ids + beg);
+                Idx eid = __ldg(eids + beg);
+                Idx type_id = __ldg(types + beg);
+                DType w = __ldg(grad_out + dst_id*feat_len + tx);
+                DType n = __ldg(norm + eid);
+                grad_weight[blockIdx.x * ntypes * feat_len + type_id * feat_len + tx] = w * n;
+            }
+        }
+    }
+}
+
+void RgcnLayer0BackwardImpl(
+    GraphRef graph,
+    runtime::NDArray grad_out,
+    runtime::NDArray norm,
+    runtime::NDArray ret){
+        //LOG(INFO) << "Calling implementation of rgn layer 0 backward";
+        typedef int32_t Idx;
+        typedef float DType;
+        auto csr = graph->GetCsrSortedByEdgeType(true);
+        auto ranges = csr[0];
+        auto ids = csr[1];
+        auto eids = csr[2];
+        auto type_ids = csr[3];
+        auto range_data = static_cast<Idx*> (ranges->data);
+        auto ids_data = static_cast<Idx*> (ids->data);
+        auto eids_data = static_cast<Idx*> (eids->data);
+        auto typeids_data = static_cast<Idx*> (type_ids->data);
+        auto grad_out_data = static_cast<DType*> (grad_out->data);
+        auto norm_data = static_cast<DType*> (norm->data);
+        auto ret_data = static_cast<DType*> (ret->data);
+        //print_dims(grad_out);
+        //print_dims(norm);
+        //print_dims(ret);
+        Idx num_nodes = ranges->shape[0] - 1;
+        Idx num_edges = eids->shape[0];
+        Idx ntypes = ret->shape[1];
+        Idx feat_len = ret->shape[2];
+        int nblks = num_nodes;
+        int nthrs = feat_len;
+        auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+        RgcnLayer0BackwardKernelImpl<Idx, DType><<<nblks, nthrs, 0, thr_entry->stream>>>
+            (range_data, ids_data, eids_data, typeids_data, grad_out_data, norm_data, ret_data, num_nodes, feat_len, ntypes);
+    }
+
+template<typename Idx, typename DType>
+__global__ void RgcnLayer1KernelImpl(Idx* ranges, 
+  Idx* src_ids, 
+  Idx* eids, 
+  Idx* types, 
+  DType* hidden, 
+  DType* weight, 
+  DType* norm, 
+  DType* ret, 
+  Idx num_nodes, 
+  Idx feat_len_y, 
+  Idx feat_len_x, 
+  Idx ntypes) {
+    if (blockIdx.x < num_nodes) {
+        Idx beg = __ldg(ranges + blockIdx.x);
+        Idx end = __ldg(ranges + blockIdx.x + 1);
+        Idx tx = threadIdx.x;
+        Idx ty = threadIdx.x / feat_len_x;
+        Idx th = threadIdx.x % feat_len_x;
+        for(;beg<end;beg++) {
+            Idx src_id = __ldg(src_ids + beg);
+            Idx eid = __ldg(eids + beg);
+            Idx type_id = __ldg(types + beg);
+            DType h = __ldg(hidden + src_id*feat_len_y + ty);
+            DType w = __ldg(weight + type_id*feat_len_y*feat_len_x + tx);
+            DType n = __ldg(norm + eid);
+            atomicAdd(ret + blockIdx.x*feat_len_x + th, w*h*n);
+        }
+    }
+}
+
+void RgcnLayer1Impl(
+    GraphRef graph,
+    runtime::NDArray hidden,
+    runtime::NDArray weight,
+    runtime::NDArray norm,
+    runtime::NDArray ret){
+        //LOG(INFO) << "Calling implementation of rgn layer 1 forward";
+        typedef int32_t Idx;
+        typedef float DType;
+        auto csr = graph->GetCsrSortedByEdgeType(false);
+        auto ranges = csr[0];
+        auto ids = csr[1];
+        auto eids = csr[2];
+        auto type_ids = csr[3];
+        auto range_data = static_cast<Idx*> (ranges->data);
+        auto ids_data = static_cast<Idx*> (ids->data);
+        auto eids_data = static_cast<Idx*> (eids->data);
+        auto typeids_data = static_cast<Idx*> (type_ids->data);
+        auto hidden_data = static_cast<DType*> (hidden->data);
+        auto weight_data = static_cast<DType*> (weight->data);
+        auto norm_data = static_cast<DType*> (norm->data);
+        auto ret_data = static_cast<DType*> (ret->data);
+        //print_dims(weight);
+        //print_dims(norm);
+        //print_dims(ret);
+        Idx num_nodes = ranges->shape[0] - 1;
+        Idx num_edges = eids->shape[0];
+        Idx ntypes = weight->shape[0];
+        Idx feat_len_y = weight->shape[1];
+        Idx feat_len_x = weight->shape[2];
+        int nblks = num_nodes;
+        int nthrs = feat_len_y * feat_len_x;
+        auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+        RgcnLayer1KernelImpl<Idx, DType><<<nblks, nthrs, 0, thr_entry->stream>>>
+            (range_data, ids_data, eids_data, typeids_data, hidden_data, weight_data, norm_data, ret_data, num_nodes, feat_len_y, feat_len_x, ntypes);
+    }
+
+template<typename Idx, typename DType>
+__global__ void RgcnLayer1BackwardKernelImpl(Idx* ranges, 
+  Idx* dst_ids, 
+  Idx* eids, 
+  Idx* types, 
+  DType* hidden, 
+  DType* weight, 
+  DType* norm, 
+  DType* grad_out, 
+  DType* grad_hidden, 
+  DType* grad_weight, 
+  Idx num_nodes, 
+  Idx feat_len_y, 
+  Idx feat_len_x, 
+  Idx ntypes) {
+    if (blockIdx.x < num_nodes) {
+        Idx beg = __ldg(ranges + blockIdx.x);
+        Idx end = __ldg(ranges + blockIdx.x + 1);
+        Idx tx = threadIdx.x;
+        for (;tx<feat_len_x * feat_len_y; tx += blockDim.x) {
+            Idx ty = tx / feat_len_x;
+            Idx th = tx % feat_len_x;
+            DType h = __ldg(hidden + blockIdx.x*feat_len_y + ty);
+            for(;beg<end;beg++) {
+                Idx dst_id = __ldg(dst_ids + beg);
+                Idx eid = __ldg(eids + beg);
+                Idx type_id = __ldg(types + beg);
+                DType g = __ldg(grad_out + dst_id * feat_len_x + th);
+                DType w = __ldg(weight + type_id*feat_len_y*feat_len_x + tx);
+                DType n = __ldg(norm + eid);
+                atomicAdd(grad_hidden + blockIdx.x*feat_len_y + ty, g*w*n);
+                atomicAdd(grad_weight + type_id*feat_len_y*feat_len_x + tx, g*h*n);
+            }
+        }
+    }
+}
+
+void RgcnLayer1BackwardImpl(
+    GraphRef graph,
+    runtime::NDArray hidden,
+    runtime::NDArray weight,
+    runtime::NDArray norm,
+    runtime::NDArray grad_out,
+    runtime::NDArray grad_hidden,
+    runtime::NDArray grad_weight){
+        typedef int32_t Idx;
+        typedef float DType;
+        auto csr = graph->GetCsrSortedByEdgeType(true);
+        auto ranges = csr[0];
+        auto ids = csr[1];
+        auto eids = csr[2];
+        auto type_ids = csr[3];
+        auto range_data = static_cast<Idx*> (ranges->data);
+        auto ids_data = static_cast<Idx*> (ids->data);
+        auto eids_data = static_cast<Idx*> (eids->data);
+        auto typeids_data = static_cast<Idx*> (type_ids->data);
+        auto hidden_data = static_cast<DType*> (hidden->data);
+        auto weight_data = static_cast<DType*> (weight->data);
+        auto norm_data = static_cast<DType*> (norm->data);
+        auto grad_out_data = static_cast<DType*> (grad_out->data);
+        auto grad_hidden_data = static_cast<DType*> (grad_hidden->data);
+        auto grad_weight_data = static_cast<DType*> (grad_weight->data);
+        //print_dims(hidden);
+        //print_dims(weight);
+        //print_dims(norm);
+        //print_dims(grad_out);
+        //print_dims(grad_hidden);
+        //print_dims(grad_weight);
+        Idx num_nodes = ranges->shape[0] - 1;
+        Idx num_edges = eids->shape[0];
+        Idx ntypes = weight->shape[0];
+        Idx feat_len_y = weight->shape[1];
+        Idx feat_len_x = weight->shape[2];
+        int nblks = num_nodes;
+        int nthrs = feat_len_y * feat_len_x;
+        auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
+        
+        RgcnLayer1BackwardKernelImpl<Idx, DType>
+            <<<nblks, nthrs, 0, thr_entry->stream>>>
+            (range_data, ids_data, eids_data, typeids_data,
+             hidden_data, weight_data, norm_data, grad_out_data, grad_hidden_data, grad_weight_data,
+             num_nodes, feat_len_y, feat_len_x, ntypes);
+    }
+
 void BackwardFusedGatKernelImpl(
     const CSRWrapper& graph,
     runtime::NDArray feat_src,

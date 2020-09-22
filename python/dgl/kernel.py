@@ -156,6 +156,18 @@ def backward_fused_gat(graph, feat_src, el, er, s, exp, ret, grad_out, grad_feat
 def nb_access(graph, feat, node_map, deg_inc_node_map):
     _CAPI_DGLNbAccess(graph, feat, node_map, deg_inc_node_map)
 
+def rgcn_layer0(graph, weight, norm, ret):
+    _CAPI_DGLRgcnLayer0(graph, weight, norm, ret)
+
+def rgcn_layer0_backward(graph, grad_out, norm, grad_weight):
+    _CAPI_DGLRgcnLayer0Backward(graph, grad_out, norm, grad_weight)
+
+def rgcn_layer1(graph, x, weight, norm, ret):
+    _CAPI_DGLRgcnLayer1(graph, x, weight, norm, ret)
+
+def rgcn_layer1_backward(graph, hidden, weight, norm, grad_out, grad_hidden, grad_weight):
+    _CAPI_DGLRgcnLayer1Backward(graph, hidden, weight, norm, grad_out, grad_hidden, grad_weight)
+
 # pylint: disable=invalid-name
 def backward_lhs_binary_op_reduce(
         reducer, op, G,

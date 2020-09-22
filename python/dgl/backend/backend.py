@@ -1253,6 +1253,12 @@ def fused_gat(graph, feat_src, el, er, sum, exp, ret, slope):
 def nb_access_bench(graph, feat, sorted_node_map_decreasing_degree, sorted_node_map_increasing_degree):
     pass
 
+def rgcn_layer0(graph, weight, norm):
+    pass
+
+def rgcn_layer1(graph, x, weight, norm):
+    pass
+
 def run_egl(exectuor):
     '''
     exec_context : 

@@ -80,6 +80,30 @@ def main(args):
     g = DGLGraph()
     g.add_nodes(num_nodes)
     g.add_edges(data.edge_src, data.edge_dst)
+    #tu_forward = sorted(list(zip(data.edge_src, data.edge_dst, data.edge_type)), key=lambda x : (x[1], x[2]))
+    #tu_backward = sorted(list(zip(data.edge_dst, data.edge_src,  data.edge_type)), key=lambda x : (x[1], x[2]))
+    #def compute_e_to_distict_t(tu):
+    #    num_edges = len(tu)
+    #    all_node_distinct_types = 0
+    #    cur_node = tu[0][1]
+    #    type_set = set()
+    #    type_set.add(tu[0][2])
+    #    for i in range(1, len(tu)):
+    #        if tu[i][1] == cur_node:
+    #            type_set.add(tu[i][2])
+    #        else:
+    #            all_node_distinct_types += len(type_set)
+    #            cur_node = tu[i][1]
+    #            type_set.clear()
+    #            type_set.add(tu[i][2])
+    #    all_node_distinct_types += len(type_set)
+    #    type_set.clear()
+    #    #print('\n'.join([str(t) for t in tu]))
+    #    print('num_edges:', num_edges, 'node distinct types', all_node_distinct_types)
+    #    return num_edges/all_node_distinct_types
+    #r_forward = compute_e_to_distict_t(tu_forward)
+    #r_backward = compute_e_to_distict_t(tu_backward)
+    #print('ratio forward:', r_forward, 'ratio_backward:', r_backward)
 
     # create model
     model = EntityClassify(len(g),
@@ -112,7 +136,6 @@ def main(args):
         loss.backward()
         optimizer.step()
         t2 = time.time()
-
         forward_time.append(t1 - t0)
         backward_time.append(t2 - t1)
         print("Epoch {:05d} | Train Forward Time(s) {:.4f} | Backward Time(s) {:.4f}".
@@ -122,7 +145,7 @@ def main(args):
         val_acc = torch.sum(logits[val_idx].argmax(dim=1) == labels[val_idx]).item() / len(val_idx)
         print("Train Accuracy: {:.4f} | Train Loss: {:.4f} | Validation Accuracy: {:.4f} | Validation loss: {:.4f}".
               format(train_acc, loss.item(), val_acc, val_loss.item()))
-    print()
+    print('max memory allocated', torch.cuda.max_memory_allocated())
 
     model.eval()
     logits = model.forward(g, feats, edge_type, edge_norm)

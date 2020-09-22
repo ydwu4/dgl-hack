@@ -409,6 +409,46 @@ DGL_REGISTER_GLOBAL("kernel._CAPI_DGLNbAccess")
   NbAccessImpl(wrapper, feat_src, node_map, deg_inc_node_map);
 });
 
+DGL_REGISTER_GLOBAL("kernel._CAPI_DGLRgcnLayer0")
+.set_body([] (DGLArgs args, DGLRetValue* rv) {
+  GraphRef g = args[0];
+  NDArray weight = args[1];
+  NDArray norm = args[2];
+  NDArray ret = args[3];
+  RgcnLayer0Impl(g, weight, norm, ret);
+});
+
+DGL_REGISTER_GLOBAL("kernel._CAPI_DGLRgcnLayer0Backward")
+.set_body([] (DGLArgs args, DGLRetValue* rv) {
+  GraphRef g = args[0];
+  NDArray grad_out = args[1];
+  NDArray norm = args[2];
+  NDArray grad_weight = args[3];
+  RgcnLayer0BackwardImpl(g, grad_out, norm, grad_weight);
+});
+
+DGL_REGISTER_GLOBAL("kernel._CAPI_DGLRgcnLayer1")
+.set_body([] (DGLArgs args, DGLRetValue* rv) {
+  GraphRef g = args[0];
+  NDArray hidden = args[1];
+  NDArray weight = args[2];
+  NDArray norm = args[3];
+  NDArray ret = args[4];
+  RgcnLayer1Impl(g, hidden, weight, norm, ret);
+});
+
+DGL_REGISTER_GLOBAL("kernel._CAPI_DGLRgcnLayer1Backward")
+.set_body([] (DGLArgs args, DGLRetValue* rv) {
+  GraphRef g = args[0];
+  NDArray hidden = args[1];
+  NDArray weight = args[2];
+  NDArray norm = args[3];
+  NDArray grad_out = args[4];
+  NDArray grad_hidden = args[5];
+  NDArray grad_weight = args[6];
+  RgcnLayer1BackwardImpl(g, hidden, weight, norm, grad_out, grad_hidden, grad_weight);
+});
+
 void BackwardLhsBinaryOpReduce(
     const std::string& reducer,
     const std::string& op,

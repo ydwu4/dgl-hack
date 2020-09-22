@@ -428,10 +428,70 @@ class NbAccess(th.autograd.Function):
         ctx.backward_cache = graph, feat, node_map
         K.nb_access(graph, feat_nd, node_map_nd, deg_inc_node_map_nd)
         return feat
+    
+    @staticmethod
+    def backward(ctx, gradout):
+        return None, None, None, None
 
 def nb_access_bench(graph, feat, node_map, deg_inc_node_map):
     g = graph._graph.get_immutable_gidx(utils.to_dgl_context(context(feat)))
     return  NbAccess.apply(g, feat, node_map, deg_inc_node_map)
+
+class RgcnFirstLayer(th.autograd.Function):
+    @staticmethod
+    def forward(ctx, graph, weight, norm, ret):
+        weight_nd = zerocopy_to_dgl_ndarray(weight)
+        norm_nd = zerocopy_to_dgl_ndarray(norm)
+        ret_nd = zerocopy_to_dgl_ndarray(ret)
+        ctx.backward_cache = graph, weight, norm
+        K.rgcn_layer0(graph, weight_nd, norm_nd, ret_nd) 
+        return ret
+
+    @staticmethod
+    def backward(ctx, gradout):
+        graph, weight, norm = ctx.backward_cache
+        grad_weight = th.zeros_like(weight) 
+        grad_out_nd = zerocopy_to_dgl_ndarray(gradout)
+        grad_weight_nd = zerocopy_to_dgl_ndarray(grad_weight)
+        norm_nd = zerocopy_to_dgl_ndarray(norm)
+        K.rgcn_layer0_backward(graph, grad_out_nd, norm_nd, grad_weight_nd)
+        return None, grad_weight, None, None
+
+def rgcn_layer0(graph, weight, norm):
+    g = graph._graph
+    ret = th.zeros((weight.size(0), weight.size(2)), dtype=weight.dtype, device=weight.device, requires_grad=True)
+    return RgcnFirstLayer.apply(g, weight, norm, ret)
+
+class RgcnSecondLayer(th.autograd.Function):
+    @staticmethod
+    def forward(ctx, graph, x, weight, norm, ret):
+        weight_nd = zerocopy_to_dgl_ndarray(weight)
+        x_nd = zerocopy_to_dgl_ndarray(x)
+        norm_nd = zerocopy_to_dgl_ndarray(norm)
+        ret_nd = zerocopy_to_dgl_ndarray(ret)
+        ctx.backward_cache = graph, weight, norm, x
+        K.rgcn_layer1(graph, x_nd, weight_nd, norm_nd, ret_nd) 
+        return ret
+
+    @staticmethod
+    def backward(ctx, gradout):
+        graph, weight, norm, x = ctx.backward_cache
+        norm_nd = zerocopy_to_dgl_ndarray(norm)
+        x_nd = zerocopy_to_dgl_ndarray(x)
+        weight_nd = zerocopy_to_dgl_ndarray(weight)
+        grad_out_nd = zerocopy_to_dgl_ndarray(gradout)
+        grad_x = th.zeros_like(x) 
+        grad_weight = th.zeros_like(weight) 
+
+        grad_x_nd = zerocopy_to_dgl_ndarray(grad_x)
+        grad_weight_nd = zerocopy_to_dgl_ndarray(grad_weight)
+        K.rgcn_layer1_backward(graph, x_nd, weight_nd, norm_nd, grad_out_nd, grad_x_nd, grad_weight_nd)
+        return None, grad_x, None, None, None
+
+def rgcn_layer1(graph, x, weight, norm):
+    g = graph._graph
+    ret = th.zeros((graph.number_of_nodes(), weight.size(2)), dtype=weight.dtype, device=weight.device, requires_grad=True)
+    return RgcnSecondLayer.apply(g, x, weight, norm, ret)
 
 class KernelWrapper(th.autograd.Function):
     @staticmethod

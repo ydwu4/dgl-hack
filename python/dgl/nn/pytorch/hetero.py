@@ -150,7 +150,10 @@ class HeteroGraphConv(nn.Module):
                     **mod_kwargs.get(etype, {}))
                 outputs[dtype].append(dstdata)
         else:
+            i = 0
+            print(i, th.cuda.memory_allocated())
             for stype, etype, dtype in g.canonical_etypes:
+                i += 1
                 rel_graph = g[stype, etype, dtype]
                 if rel_graph.number_of_edges() == 0:
                     continue
@@ -162,10 +165,12 @@ class HeteroGraphConv(nn.Module):
                     *mod_args.get(etype, ()),
                     **mod_kwargs.get(etype, {}))
                 outputs[dtype].append(dstdata)
+                print(i, th.cuda.memory_allocated())
         rsts = {}
         for nty, alist in outputs.items():
             if len(alist) != 0:
                 rsts[nty] = self.agg_fn(alist, nty)
+                print(i, th.cuda.memory_allocated())
         return rsts
 
 def get_aggregate_fn(agg):

@@ -71,11 +71,29 @@ class Graph: public GraphInterface {
   void AddEdge(dgl_id_t src, dgl_id_t dst) override;
 
   /*!
+   * \brief Add one edge to the graph.
+   * \param src The source vertex.
+   * \param dst The destination vertex.
+   * \param type_id The type id of edge.
+   */
+  void AddEdge(dgl_id_t src, dgl_id_t dst, dgl_id_t type_id);
+
+  /*!
    * \brief Add edges to the graph.
    * \param src_ids The source vertex id array.
    * \param dst_ids The destination vertex id array.
    */
   void AddEdges(IdArray src_ids, IdArray dst_ids) override;
+
+  /*!
+   * \brief Add edges with types to the graph.
+   * \param src_ids The source vertex id array.
+   * \param dst_ids The destination vertex id array.
+   * \param type_ids The edge type id array.
+   */
+  void AddEdgesWithType(IdArray src_ids, IdArray dst_ids, IdArray type_ids) override;
+
+  std::vector<IdArray> GetCsrSortedByEdgeType(bool transpose) override;
 
   /*!
    * \brief Clear the graph. Remove all vertices/edges.
@@ -365,6 +383,7 @@ class Graph: public GraphInterface {
     std::vector<dgl_id_t> succ;
     /*! \brief out edge list */
     std::vector<dgl_id_t> edge_id;
+    std::vector<dgl_id_t> type_id;
   };
   typedef std::vector<EdgeList> AdjacencyList;
 
@@ -383,6 +402,8 @@ class Graph: public GraphInterface {
 
   /*! \brief number of edges */
   uint64_t num_edges_ = 0;
+
+  std::vector<IdArray> cached_[2];
 };
 
 }  // namespace dgl

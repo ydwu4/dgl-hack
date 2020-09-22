@@ -1224,6 +1224,24 @@ class DGLGraph(DGLBaseGraph):
         if self._msg_index is not None:
             self._msg_index = self._msg_index.append_zeros(num)
         self._msg_frame.add_rows(num)
+    
+    @mutation
+    def add_edges_with_type(self, u, v, etypes, data=None):
+        u = utils.toindex(u)
+        v = utils.toindex(v)
+        e = utils.toindex(etypes)
+        self._graph.add_edges_with_type(u, v, e)
+        num = max(len(u), len(v))
+        if data is None:
+            # Initialize feature placeholders if there are features existing
+            # NOTE: use max due to edge broadcasting syntax
+            self._edge_frame.add_rows(num)
+        else:
+            self._edge_frame.append(data)
+        # initialize feature placeholder for messages
+        if self._msg_index is not None:
+            self._msg_index = self._msg_index.append_zeros(num)
+        self._msg_frame.add_rows(num)
 
     @mutation
     def remove_nodes(self, vids):

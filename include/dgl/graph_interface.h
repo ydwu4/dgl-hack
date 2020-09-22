@@ -99,6 +99,16 @@ class GraphInterface : public runtime::Object {
   virtual void AddEdges(IdArray src_ids, IdArray dst_ids) = 0;
 
   /*!
+   * \brief Add edges to the graph.
+   * \param src_ids The source vertex id array.
+   * \param dst_ids The destination vertex id array.
+   * \param type_ids The destination vertex id array.
+   */
+  virtual void AddEdgesWithType(IdArray src_ids, IdArray dst_ids, IdArray type_ids) = 0;
+
+  virtual std::vector<IdArray> GetCsrSortedByEdgeType(bool transpose) = 0;
+
+  /*!
    * \brief Clear the graph. Remove all vertices/edges.
    */
   virtual void Clear() = 0;

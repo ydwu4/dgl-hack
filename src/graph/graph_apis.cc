@@ -26,7 +26,6 @@ DGL_REGISTER_GLOBAL("graph_index._CAPI_DGLGraphCreateMutable")
     *rv = GraphRef(Graph::Create());
   });
 
-
 DGL_REGISTER_GLOBAL("graph_index._CAPI_DGLGraphCreate")
 .set_body([] (DGLArgs args, DGLRetValue* rv) {
     const IdArray src_ids = args[0];
@@ -81,6 +80,15 @@ DGL_REGISTER_GLOBAL("graph_index._CAPI_DGLGraphAddEdges")
     const IdArray src = args[1];
     const IdArray dst = args[2];
     g->AddEdges(src, dst);
+  });
+
+DGL_REGISTER_GLOBAL("graph_index._CAPI_DGLGraphAddEdgesWithType")
+.set_body([] (DGLArgs args, DGLRetValue* rv) {
+    GraphRef g = args[0];
+    const IdArray src = args[1];
+    const IdArray dst = args[2];
+    const IdArray types = args[3];
+    g->AddEdgesWithType(src, dst, types);
   });
 
 DGL_REGISTER_GLOBAL("graph_index._CAPI_DGLGraphClear")
@@ -281,6 +289,14 @@ DGL_REGISTER_GLOBAL("graph_index._CAPI_DGLGraphGetAdj")
     bool transpose = args[1];
     std::string format = args[2];
     auto res = g->GetAdj(transpose, format);
+    *rv = ConvertNDArrayVectorToPackedFunc(res);
+  });
+
+DGL_REGISTER_GLOBAL("graph_index._CAPI_DGLGraphGetCsrSortedByEdgeType")
+.set_body([] (DGLArgs args, DGLRetValue* rv) {
+    GraphRef g = args[0];
+    bool transpose = args[1];
+    auto res = g->GetCsrSortedByEdgeType(transpose);
     *rv = ConvertNDArrayVectorToPackedFunc(res);
   });
 
