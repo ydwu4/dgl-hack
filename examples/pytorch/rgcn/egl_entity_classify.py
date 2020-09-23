@@ -24,103 +24,6 @@ from model import BaseRGCN
 # pylint: disable= no-member, arguments-differ, invalid-name
 import torch as th
 from torch import nn
-class EglRelGraphConv2(nn.Module):
-    def __init__(self,
-                 in_feat,
-                 out_feat,
-                 num_rels,
-                 num_edges,
-                 regularizer="basis",
-                 num_bases=None,
-                 bias=True,
-                 activation=None,
-                 self_loop=False,
-                 dropout=0.0,
-                 layer_type=0):
-        super(EglRelGraphConv, self).__init__()
-        self.in_feat = in_feat
-        self.out_feat = out_feat
-        self.num_rels = num_rels
-        self.regularizer = regularizer
-        self.num_bases = num_bases
-        if self.num_bases is None or self.num_bases > self.num_rels or self.num_bases <= 0:
-            self.num_bases = self.num_rels
-        self.bias = bias
-        self.activation = activation
-        self.layer_type = layer_type
-
-        if regularizer == "basis":
-            # add basis weights
-            self.weight = nn.Parameter(th.Tensor(self.num_bases, self.in_feat, self.out_feat))
-            if self.num_bases < self.num_rels:
-                # linear combination coefficients
-                self.w_comp = nn.Parameter(th.Tensor(self.num_rels, self.num_bases))
-            nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
-            if self.num_bases < self.num_rels:
-                nn.init.xavier_uniform_(self.w_comp,
-                                        gain=nn.init.calculate_gain('relu'))
-        else:
-            raise ValueError("Regularizer must be either 'basis' or 'bdd'")
-
-        # bias
-        if self.bias:
-            self.h_bias = nn.Parameter(th.Tensor(out_feat))
-            nn.init.zeros_(self.h_bias)
-
-        self.dropout = nn.Dropout(dropout)
-
-
-    def forward(self, g, x, etypes, norm=None):
-        """ Forward computation
-
-        Parameters
-        ----------
-        g : DGLGraph
-            The graph.
-        x : torch.Tensor
-            Input node features. Could be either
-                * :math:`(|V|, D)` dense tensor
-                * :math:`(|V|,)` int64 vector, representing the categorical values of each
-                  node. We then treat the input feature as an one-hot encoding feature.
-        etypes : torch.Tensor
-            Edge type tensor. Shape: :math:`(|E|,)`
-        norm : torch.Tensor
-            Optional edge normalizer tensor. Shape: :math:`(|E|, 1)`
-
-        Returns
-        -------
-        torch.Tensor
-            New node features.
-        """
-        print('aaa',th.cuda.memory_allocated(), th.cuda.max_memory_allocated())
-        if self.num_bases < self.num_rels:
-            # generate all weights from bases
-            #print('weight size:', self.weight.size(), 'w_comp size:', self.w_comp.size())
-            #weight = th.matmul(self.w_comp, self.weight)
-            #print('new weight size:', weight.size())
-            weight = self.weight.view(self.num_bases,
-                                      self.in_feat * self.out_feat)
-            #print('weight size:', self.weight.size(), 'w_comp size:', self.w_comp.size())
-            weight = th.matmul(self.w_comp, weight).view(
-                self.num_rels, self.in_feat, self.out_feat)
-        else:
-            weight = self.weight
-        print('bbb',th.cuda.memory_allocated(), th.cuda.max_memory_allocated())
-
-        if self.layer_type == 0:
-            node_repr = B.rgcn_layer0(g, weight.permute(1, 0, 2), norm)
-            #print('output of layer 0', node_repr)
-        else:
-            node_repr = B.rgcn_layer1(g, x, weight, norm)
-            #print('output of layer 1', node_repr)
-        print('ccc',th.cuda.memory_allocated(), th.cuda.max_memory_allocated())
-        if self.bias:
-            node_repr = node_repr + self.h_bias
-        if self.activation:
-            node_repr = self.activation(node_repr)
-        node_repr = self.dropout(node_repr)
-        return node_repr
-
 class EglRelGraphConv(nn.Module):
     def __init__(self,
                  in_feat,
@@ -190,6 +93,8 @@ class EglRelGraphConv(nn.Module):
             New node features.
         """
         #print('aaa',th.cuda.memory_allocated(),th.cuda.max_memory_allocated())
+        #torch.cuda.synchronize()
+        #t1 = time.time()
         if self.num_bases < self.num_rels:
             # generate all weights from bases
             weight = self.weight.view(self.num_bases,
@@ -200,13 +105,17 @@ class EglRelGraphConv(nn.Module):
             #print('new weight size:', weight.size())
         else:
             weight = self.weight
+        #torch.cuda.synchronize()
         #print('bbb',th.cuda.memory_allocated(),th.cuda.max_memory_allocated())
+        #t2 = time.time()
 
         if self.layer_type == 0:
             node_repr = B.rgcn_layer0(g, weight, norm)
             #print('output of layer 0', node_repr)
         else:
             node_repr = B.rgcn_layer1(g, x, weight, norm)
+        #torch.cuda.synchronize()
+        #t3 = time.time()
             #print('output of layer 1', node_repr)
         #print('ccc',th.cuda.memory_allocated(),th.cuda.max_memory_allocated())
         if self.bias:
@@ -214,6 +123,11 @@ class EglRelGraphConv(nn.Module):
         if self.activation:
             node_repr = self.activation(node_repr)
         node_repr = self.dropout(node_repr)
+        #torch.cuda.synchronize()
+        #t4 = time.time()
+        #print('matmul takes:',t2-t1, 's', (t2-t1)/(t4-t1),'%')
+        #print('gcn takes:',t3-t2, 's', (t3-t2)/(t4-t1),'%')
+        #print('rest takes:',t4-t3, 's', (t4-t3)/(t4-t1),'%')
         return node_repr
 
 class EGLRGCNModel(nn.Module):
@@ -323,20 +237,27 @@ def main(args):
     forward_time = []
     backward_time = []
     model.train()
+    train_labels=labels[train_idx]
+    train_idx = list(train_idx)
     for epoch in range(args.n_epochs):
         optimizer.zero_grad()
         t0 = time.time()
         logits = model(g, feats, edge_type, edge_norm)
-        loss = F.cross_entropy(logits[train_idx], labels[train_idx])
+        tb = time.time()
+        train_logits=logits[train_idx]
+        ta = time.time()
+        loss = F.cross_entropy(train_logits, train_labels)
         t1 = time.time()
         loss.backward()
         optimizer.step()
+        torch.cuda.synchronize()
         t2 = time.time()
-
-        forward_time.append(t1 - t0)
-        backward_time.append(t2 - t1)
-        print("Epoch {:05d} | Train Forward Time(s) {:.4f} | Backward Time(s) {:.4f}".
-              format(epoch, forward_time[-1], backward_time[-1]))
+        print('model run takes', ta - t0, 's', (ta-t0)/(t1-t0), '%', ' cross entropy takes', (t1-ta)/(t1-t0), '%', 'index select takes', ta-tb, 's')
+        if epoch >=3:
+            forward_time.append(t1 - t0)
+            backward_time.append(t2 - t1)
+            print("Epoch {:05d} | Train Forward Time(s) {:.4f} | Backward Time(s) {:.4f}".
+                  format(epoch, forward_time[-1], backward_time[-1]))
         train_acc = torch.sum(logits[train_idx].argmax(dim=1) == labels[train_idx]).item() / len(train_idx)
         val_loss = F.cross_entropy(logits[val_idx], labels[val_idx])
         val_acc = torch.sum(logits[val_idx].argmax(dim=1) == labels[val_idx]).item() / len(val_idx)

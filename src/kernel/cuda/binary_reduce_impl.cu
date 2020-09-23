@@ -939,6 +939,8 @@ void RgcnLayer0BackwardImpl(
     runtime::NDArray norm,
     runtime::NDArray ret){
         //LOG(INFO) << "Calling implementation of rgn layer 0 backward";
+        //cudaDeviceSynchronize();
+        //auto t1 = std::chrono::steady_clock::now();
         typedef int32_t Idx;
         typedef float DType;
         auto csr = graph->GetCsrSortedByEdgeType(true);
@@ -965,10 +967,14 @@ void RgcnLayer0BackwardImpl(
         auto* thr_entry = runtime::CUDAThreadEntry::ThreadLocal();
         RgcnLayer0BackwardKernelImpl<Idx, DType><<<nblks, nthrs, 0, thr_entry->stream>>>
             (range_data, ids_data, eids_data, typeids_data, grad_out_data, norm_data, ret_data, num_nodes, feat_len, ntypes);
+        //cudaDeviceSynchronize();
+        //auto t2 = std::chrono::steady_clock::now();
+        //LOG(INFO) << "layer 0 backward kernel takes:" << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -t1).count()/1000.0 << " s";
     }
 
 template<typename Idx, typename DType>
-__global__ void RgcnLayer1KernelImpl(Idx* ranges, 
+// bgs: 0.019
+__global__ void RgcnLayer1KernelImplAtomic(Idx* ranges, 
   Idx* src_ids, 
   Idx* eids, 
   Idx* types, 
@@ -995,6 +1001,44 @@ __global__ void RgcnLayer1KernelImpl(Idx* ranges,
             DType n = __ldg(norm + eid);
             atomicAdd(ret + blockIdx.x*feat_len_x + th, w*h*n);
         }
+    }
+}
+
+// bgs:
+template<typename Idx, typename DType>
+__global__ void RgcnLayer1KernelImpl(const Idx* ranges, 
+  const Idx* src_ids, 
+  const Idx* eids, 
+  const Idx* types, 
+  const DType* hidden, 
+  const DType* weight, 
+  const DType* norm, 
+  DType* ret, 
+  Idx num_nodes, 
+  Idx feat_len_y, 
+  Idx feat_len_x, 
+  Idx ntypes) {
+    if (blockIdx.x < num_nodes) {
+        Idx beg = __ldg(ranges + blockIdx.x);
+        Idx end = __ldg(ranges + blockIdx.x + 1);
+        Idx tx = threadIdx.x;
+        Idx ty = threadIdx.x / feat_len_x;
+        Idx th = threadIdx.x % feat_len_x;
+        DType agg_val = 0.; 
+        DType w = 0.;
+        Idx cur_type_id = -1;
+        for(;beg<end;beg++) {
+            Idx src_id = __ldg(src_ids + beg);
+            Idx eid = __ldg(eids + beg);
+            Idx type_id = __ldg(types + beg);
+            if (type_id != cur_type_id) {
+                w = __ldg(weight + type_id*feat_len_y*feat_len_x + tx);
+            }
+            DType h = __ldg(hidden + src_id*feat_len_y + ty);
+            DType n = __ldg(norm + eid);
+            agg_val += h * w * n;
+        }
+        atomicAdd(ret + blockIdx.x*feat_len_x + th, agg_val);
     }
 }
 
@@ -1059,6 +1103,7 @@ __global__ void RgcnLayer1BackwardKernelImpl(Idx* ranges,
             Idx ty = tx / feat_len_x;
             Idx th = tx % feat_len_x;
             DType h = __ldg(hidden + blockIdx.x*feat_len_y + ty);
+            DType agg = 0.;
             for(;beg<end;beg++) {
                 Idx dst_id = __ldg(dst_ids + beg);
                 Idx eid = __ldg(eids + beg);
@@ -1066,9 +1111,10 @@ __global__ void RgcnLayer1BackwardKernelImpl(Idx* ranges,
                 DType g = __ldg(grad_out + dst_id * feat_len_x + th);
                 DType w = __ldg(weight + type_id*feat_len_y*feat_len_x + tx);
                 DType n = __ldg(norm + eid);
-                atomicAdd(grad_hidden + blockIdx.x*feat_len_y + ty, g*w*n);
+                agg += g*w*n;
                 atomicAdd(grad_weight + type_id*feat_len_y*feat_len_x + tx, g*h*n);
             }
+            atomicAdd(grad_hidden + blockIdx.x*feat_len_y + ty, agg);
         }
     }
 }
@@ -1081,6 +1127,8 @@ void RgcnLayer1BackwardImpl(
     runtime::NDArray grad_out,
     runtime::NDArray grad_hidden,
     runtime::NDArray grad_weight){
+        //cudaDeviceSynchronize();
+        //auto t1 = std::chrono::steady_clock::now();
         typedef int32_t Idx;
         typedef float DType;
         auto csr = graph->GetCsrSortedByEdgeType(true);
@@ -1118,6 +1166,9 @@ void RgcnLayer1BackwardImpl(
             (range_data, ids_data, eids_data, typeids_data,
              hidden_data, weight_data, norm_data, grad_out_data, grad_hidden_data, grad_weight_data,
              num_nodes, feat_len_y, feat_len_x, ntypes);
+        //cudaDeviceSynchronize();
+        //auto t2 = std::chrono::steady_clock::now();
+        //LOG(INFO) << "layer 1 backward kernel takes:" << std::chrono::duration_cast<std::chrono::milliseconds>(t2 -t1).count()/1000.0 << " s";
     }
 
 void BackwardFusedGatKernelImpl(
