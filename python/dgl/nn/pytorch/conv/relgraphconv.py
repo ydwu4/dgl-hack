@@ -125,7 +125,6 @@ class RelGraphConv(nn.Module):
     def basis_message_func(self, edges):
         """Message function for basis regularizer"""
         if self.num_bases < self.num_rels:
-            # generate all weights from bases
             weight = self.weight.view(self.num_bases,
                                       self.in_feat * self.out_feat)
             weight = th.matmul(self.w_comp, weight).view(
@@ -133,9 +132,7 @@ class RelGraphConv(nn.Module):
         else:
             weight = self.weight
 
-        #print("weight size:", weight.size(), "edge_type_size:", edges.data['type'].size())
         msg = utils.bmm_maybe_select(edges.src['h'], weight, edges.data['type'])
-        #print('size of source', edges.src['h'].size(), 'first 5', edges.src['h'][:5], 'weight size', weight.size(), 'msg size:', msg.size())
         if 'norm' in edges.data:
             msg = msg * edges.data['norm']
         return {'msg': msg}

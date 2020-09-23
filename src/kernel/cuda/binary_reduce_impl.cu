@@ -848,7 +848,7 @@ __global__ void RgcnLayer0KernelImpl(Idx* ranges, Idx* src_ids, Idx* eids, Idx* 
                 Idx src_id = __ldg(src_ids + beg);
                 Idx eid = __ldg(eids + beg);
                 Idx type_id = __ldg(types + beg);
-                DType w = __ldg(weight + src_id*ntypes*feat_len + type_id*feat_len + tx);
+                DType w = __ldg(weight + type_id*ntypes*feat_len + src_id*feat_len + tx);
                 DType n = __ldg(norm + eid);
                 agg_val += w * n;
                 //printf("w:%f norm:%f agg_val:%f\n", w, n, agg_val);
@@ -927,7 +927,7 @@ __global__ void RgcnLayer0BackwardKernelImpl(Idx* ranges,
                 Idx type_id = __ldg(types + beg);
                 DType w = __ldg(grad_out + dst_id*feat_len + tx);
                 DType n = __ldg(norm + eid);
-                grad_weight[blockIdx.x * ntypes * feat_len + type_id * feat_len + tx] = w * n;
+                grad_weight[type_id * ntypes * feat_len + blockIdx.x * feat_len + tx] = w * n;
             }
         }
     }
@@ -1020,6 +1020,7 @@ void RgcnLayer1Impl(
         auto weight_data = static_cast<DType*> (weight->data);
         auto norm_data = static_cast<DType*> (norm->data);
         auto ret_data = static_cast<DType*> (ret->data);
+        //print_dims(hidden);
         //print_dims(weight);
         //print_dims(norm);
         //print_dims(ret);

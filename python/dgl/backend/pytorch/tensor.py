@@ -443,14 +443,15 @@ class RgcnFirstLayer(th.autograd.Function):
         weight_nd = zerocopy_to_dgl_ndarray(weight)
         norm_nd = zerocopy_to_dgl_ndarray(norm)
         ret_nd = zerocopy_to_dgl_ndarray(ret)
-        ctx.backward_cache = graph, weight, norm
+        ctx.backward_cache = graph, weight.size(), norm
         K.rgcn_layer0(graph, weight_nd, norm_nd, ret_nd) 
         return ret
 
     @staticmethod
     def backward(ctx, gradout):
-        graph, weight, norm = ctx.backward_cache
-        grad_weight = th.zeros_like(weight) 
+        graph, weight_size, norm = ctx.backward_cache
+        grad_weight = th.zeros(weight_size, dtype=norm.dtype, device=norm.device) 
+
         grad_out_nd = zerocopy_to_dgl_ndarray(gradout)
         grad_weight_nd = zerocopy_to_dgl_ndarray(grad_weight)
         norm_nd = zerocopy_to_dgl_ndarray(norm)
@@ -459,7 +460,7 @@ class RgcnFirstLayer(th.autograd.Function):
 
 def rgcn_layer0(graph, weight, norm):
     g = graph._graph
-    ret = th.zeros((weight.size(0), weight.size(2)), dtype=weight.dtype, device=weight.device, requires_grad=True)
+    ret = th.zeros((weight.size(1), weight.size(2)), dtype=weight.dtype, device=weight.device, requires_grad=True)
     return RgcnFirstLayer.apply(g, weight, norm, ret)
 
 class RgcnSecondLayer(th.autograd.Function):

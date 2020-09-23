@@ -24,8 +24,7 @@ from model import BaseRGCN
 # pylint: disable= no-member, arguments-differ, invalid-name
 import torch as th
 from torch import nn
-
-class EglRelGraphConv(nn.Module):
+class EglRelGraphConv2(nn.Module):
     def __init__(self,
                  in_feat,
                  out_feat,
@@ -93,40 +92,123 @@ class EglRelGraphConv(nn.Module):
         torch.Tensor
             New node features.
         """
+        print('aaa',th.cuda.memory_allocated(), th.cuda.max_memory_allocated())
         if self.num_bases < self.num_rels:
             # generate all weights from bases
-            weight = self.weight.view(self.in_feat,
-                                      self.num_bases*self.out_feat)
-            weight = th.matmul(self.w_comp.unsqueeze(0), weight).view(
-                self.in_feat, self.num_rels, self.out_feat)
+            #print('weight size:', self.weight.size(), 'w_comp size:', self.w_comp.size())
+            #weight = th.matmul(self.w_comp, self.weight)
+            #print('new weight size:', weight.size())
+            weight = self.weight.view(self.num_bases,
+                                      self.in_feat * self.out_feat)
+            #print('weight size:', self.weight.size(), 'w_comp size:', self.w_comp.size())
+            weight = th.matmul(self.w_comp, weight).view(
+                self.num_rels, self.in_feat, self.out_feat)
         else:
             weight = self.weight
-        print('weight size:', self.weight.size(), "self.weight.device", self.weight.device, 'weight.device:', weight.device, 'num_rels', self.num_rels, 'num_bases', self.num_bases)
+        print('bbb',th.cuda.memory_allocated(), th.cuda.max_memory_allocated())
 
-        #msg = utils.bmm_maybe_select(edges.src['h'], weight, edges.data['type'])
-        #def bmm_maybe_select(A,B,index):
-        #   if A.dtype == th.int64 and len(A.shape) == 1:
-        #       # following is a faster version of B[index, A, :]
-        #       B = B.view(-1, B.shape[2])
-        #       flatidx = index * B.shape[1] + A
-        #       return B.index_select(0, flatidx)
-        #   else:
-        #       BB = B.index_select(0, index)
-        #       return th.bmm(A.unsqueeze(1), BB).squeeze()
-        #if 'norm' in edges.data:
-        #    msg = msg * edges.data['norm']
-        #g.update_all(self.message_func, fn.sum(msg='msg', out='h'))
+        if self.layer_type == 0:
+            node_repr = B.rgcn_layer0(g, weight.permute(1, 0, 2), norm)
+            #print('output of layer 0', node_repr)
+        else:
+            node_repr = B.rgcn_layer1(g, x, weight, norm)
+            #print('output of layer 1', node_repr)
+        print('ccc',th.cuda.memory_allocated(), th.cuda.max_memory_allocated())
+        if self.bias:
+            node_repr = node_repr + self.h_bias
+        if self.activation:
+            node_repr = self.activation(node_repr)
+        node_repr = self.dropout(node_repr)
+        return node_repr
 
-        # apply bias and activation
-        # g: EGLGraph has methods: get_in_csr, get_out_csr, get_eids, eid_to_local_eid
-        # weight: parameter permute into [node_id][rel][feature]
-        # Norm: constant indexed by [eid][feature]
+class EglRelGraphConv(nn.Module):
+    def __init__(self,
+                 in_feat,
+                 out_feat,
+                 num_rels,
+                 num_edges,
+                 regularizer="basis",
+                 num_bases=None,
+                 bias=True,
+                 activation=None,
+                 self_loop=False,
+                 dropout=0.0,
+                 layer_type=0):
+        super(EglRelGraphConv, self).__init__()
+        self.in_feat = in_feat
+        self.out_feat = out_feat
+        self.num_rels = num_rels
+        self.regularizer = regularizer
+        self.num_bases = num_bases
+        if self.num_bases is None or self.num_bases > self.num_rels or self.num_bases <= 0:
+            self.num_bases = self.num_rels
+        self.bias = bias
+        self.activation = activation
+        self.layer_type = layer_type
+
+        if regularizer == "basis":
+            # add basis weights
+            self.weight = nn.Parameter(th.Tensor(self.num_bases, self.in_feat, self.out_feat))
+            if self.num_bases < self.num_rels:
+                # linear combination coefficients
+                self.w_comp = nn.Parameter(th.Tensor(self.num_rels, self.num_bases))
+            nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
+            if self.num_bases < self.num_rels:
+                nn.init.xavier_uniform_(self.w_comp,
+                                        gain=nn.init.calculate_gain('relu'))
+        else:
+            raise ValueError("Regularizer must be either 'basis' or 'bdd'")
+
+        # bias
+        if self.bias:
+            self.h_bias = nn.Parameter(th.Tensor(out_feat))
+            nn.init.zeros_(self.h_bias)
+
+        self.dropout = nn.Dropout(dropout)
+
+
+    def forward(self, g, x, etypes, norm=None):
+        """ Forward computation
+
+        Parameters
+        ----------
+        g : DGLGraph
+            The graph.
+        x : torch.Tensor
+            Input node features. Could be either
+                * :math:`(|V|, D)` dense tensor
+                * :math:`(|V|,)` int64 vector, representing the categorical values of each
+                  node. We then treat the input feature as an one-hot encoding feature.
+        etypes : torch.Tensor
+            Edge type tensor. Shape: :math:`(|E|,)`
+        norm : torch.Tensor
+            Optional edge normalizer tensor. Shape: :mathtorch.bmm(A.unsqueeze(0).expand_as(v), v):`(|E|, 1)`
+
+        Returns
+        -------
+        torch.Tensor
+            New node features.
+        """
+        #print('aaa',th.cuda.memory_allocated(),th.cuda.max_memory_allocated())
+        if self.num_bases < self.num_rels:
+            # generate all weights from bases
+            weight = self.weight.view(self.num_bases,
+                                      self.in_feat * self.out_feat)
+            #print('weight size:', self.weight.size(), 'w_comp size:', self.w_comp.size())
+            weight = th.matmul(self.w_comp, weight).view(
+                self.num_rels, self.in_feat, self.out_feat)
+            #print('new weight size:', weight.size())
+        else:
+            weight = self.weight
+        #print('bbb',th.cuda.memory_allocated(),th.cuda.max_memory_allocated())
+
         if self.layer_type == 0:
             node_repr = B.rgcn_layer0(g, weight, norm)
             #print('output of layer 0', node_repr)
         else:
-            node_repr = B.rgcn_layer1(g, x, weight.permute(1, 0, 2).contiguous(), norm)
+            node_repr = B.rgcn_layer1(g, x, weight, norm)
             #print('output of layer 1', node_repr)
+        #print('ccc',th.cuda.memory_allocated(),th.cuda.max_memory_allocated())
         if self.bias:
             node_repr = node_repr + self.h_bias
         if self.activation:

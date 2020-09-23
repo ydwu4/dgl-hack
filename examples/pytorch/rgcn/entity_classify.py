@@ -110,7 +110,7 @@ def main(args):
                            args.n_hidden,
                            num_classes,
                            num_rels,
-                           num_bases=args.n_bases,
+                           num_bases=args.num_bases,
                            num_hidden_layers=args.n_layers - 2,
                            dropout=args.dropout,
                            use_self_loop=args.use_self_loop,
@@ -168,7 +168,7 @@ if __name__ == '__main__':
             help="gpu")
     parser.add_argument("--lr", type=float, default=1e-2,
             help="learning rate")
-    parser.add_argument("--n-bases", type=int, default=-1,
+    parser.add_argument("--num_bases", type=int, default=-1,
             help="number of filter weight matrices, default: -1 [use all]")
     parser.add_argument("--n-layers", type=int, default=2,
             help="number of propagation rounds")
