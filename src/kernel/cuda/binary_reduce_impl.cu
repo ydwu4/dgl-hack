@@ -484,10 +484,32 @@ __global__ void FeatureAdaptiveNbAccessKernel(minigun::Csr<Idx> csr, DType* feat
     }
 }
 template<typename Idx, typename DType>
+__global__ void FeatureAdaptiveNbAccessKernel2(minigun::Csr<Idx> csr, DType* feat, Idx feat_len, Idx num_nodes, Idx num_edges) {
+    //extern __shared__ DType dst_feat[];
+    Idx dst_id = blockIdx.x;
+    Idx beg = __ldg(csr.row_offsets.data + dst_id);
+    Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
+    Idx tx = threadIdx.x;
+    for(; tx<feat_len; tx += blockDim.x) {
+        //dst_feat[tx] = __ldg(feat + dst_id * feat_len + tx);
+        //__syncthreads();
+        for(; beg < end; ++beg) {
+            //Idx src_id = __ldg(csr.column_indices.data + beg);
+            //DType src_feat = __ldg(feat + src_id * feat_len + tx);
+            Idx src_id = csr.column_indices.data[beg];
+            DType src_feat = feat[src_id*feat_len + tx];
+            //for (Idx i=0; i<20; ++i) {
+            //    src_feat = src_feat + i;
+            //}
+        }
+    }
+}
+template<typename Idx, typename DType>
 __global__ void FeatureAdaptiveNbAccessDegIncKernel(minigun::Csr<Idx> csr, DType* feat, Idx feat_len, Idx num_nodes, Idx num_edges, Idx* deg_inc_node_map) {
     //extern __shared__ DType dst_feat[];
     if (blockIdx.x < num_nodes) {
-        Idx dst_id = __ldg(deg_inc_node_map + blockIdx.x);
+        //Idx dst_id = __ldg(deg_inc_node_map + blockIdx.x);
+        Idx dst_id = blockIdx.x;
         Idx beg = __ldg(csr.row_offsets.data + dst_id);
         Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
         Idx tx = threadIdx.x;
@@ -531,26 +553,24 @@ __global__ void FeatureAdaptiveNbAccessKernelWithAtomic(minigun::Csr<Idx> csr, D
 
 template<typename Idx, typename DType>
 __global__ void FeatureAdaptiveNbAccessKernelWithDynamicBlkId(minigun::Csr<Idx> csr, DType* feat, Idx feat_len, Idx num_nodes, Idx num_edges, Idx* blk_id, Idx* sorted_node_map) {
-    //extern __shared__ DType dst_feat[];
     __shared__ Idx dynamic_block_id[1];
     if (threadIdx.x == 0) {
         dynamic_block_id[0] = atomicAdd(blk_id, 1);
     }
     __syncthreads();
     if (dynamic_block_id[0] < num_nodes) {
-        Idx dst_id = __ldg(sorted_node_map + dynamic_block_id[0]);
+        //Idx dst_id = __ldg(sorted_node_map + dynamic_block_id[0]);
+        Idx dst_id = dynamic_block_id[0];
         Idx beg = __ldg(csr.row_offsets.data + dst_id);
         Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
+        //if (threadIdx.x == 0) {
+        //    printf("dst_id:%d degree:%d\n", dst_id, end-beg);
+        //}
         Idx tx = threadIdx.x;
         for(; tx<feat_len; tx += blockDim.x) {
-            //dst_feat[threadIdx.x] = __ldg(feat + dst_id * feat_len + tx);
-            //__syncthreads();
             for(; beg < end; ++beg) {
                 Idx src_id = __ldg(csr.column_indices.data + beg);
                 DType src_feat = __ldg(feat + src_id * feat_len + tx);
-                //for (Idx i=0; i<20; ++i) {
-                //    src_feat = src_feat + i;
-                //}
             }
         }
     }
@@ -559,7 +579,8 @@ __global__ void FeatureAdaptiveNbAccessKernelWithDynamicBlkId(minigun::Csr<Idx> 
 template<typename Idx, typename DType>
 __global__ void FeatureAdaptiveNbAccessKernelWithDynamicBlkIdNoAtomic(minigun::Csr<Idx> csr, DType* feat, Idx feat_len, Idx num_nodes, Idx num_edges, Idx* blk_id, Idx* sorted_node_map) {
     if (blockIdx.x < num_nodes) {
-        Idx dst_id = __ldg(sorted_node_map + blockIdx.x);
+        //Idx dst_id = __ldg(sorted_node_map + blockIdx.x);
+        Idx dst_id = blockIdx.x;
         Idx beg = __ldg(csr.row_offsets.data + dst_id);
         Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
         Idx tx = threadIdx.x;
@@ -567,9 +588,6 @@ __global__ void FeatureAdaptiveNbAccessKernelWithDynamicBlkIdNoAtomic(minigun::C
             for(; beg < end; ++beg) {
                 Idx src_id = __ldg(csr.column_indices.data + beg);
                 DType src_feat = __ldg(feat + src_id * feat_len + tx);
-                //for (Idx i=0; i<20; ++i) {
-                //    src_feat = src_feat + i;
-                //}
             }
         }
     }
@@ -588,7 +606,40 @@ __global__ void FeatureAdaptiveNbAccessKernelWithDynamicBlkIdNoAtomicSharding(mi
     Idx tx = threadIdx.x % new_warp_size;
     Idx start_off = blockIdx.x * nodes_per_blk;
     if (start_off + new_warp_id < num_nodes) {
-        Idx dst_id = __ldg(sorted_node_map + start_off + new_warp_id);
+        //Idx dst_id = __ldg(sorted_node_map + start_off + new_warp_id);
+        Idx dst_id = start_off + new_warp_id;
+        Idx beg = __ldg(csr.row_offsets.data + dst_id);
+        Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
+        for(; tx<feat_len; tx += new_warp_size) {
+            for(; beg<end; ++beg) {
+                Idx src_id = __ldg(csr.column_indices.data + beg);
+                DType src_feat = __ldg(feat + src_id * feat_len + tx);
+            }
+        }
+    }
+}
+
+template<typename Idx, typename DType>
+__global__ void FeatureAdaptiveNbAccessKernelWithAtomicSharding(minigun::Csr<Idx> csr,
+     DType* feat,
+     Idx feat_len,
+     Idx num_nodes,
+     Idx num_edges, 
+     Idx nodes_per_blk, 
+     Idx new_warp_size,
+     Idx* blk_id,
+     Idx* sorted_node_map) {
+    __shared__ Idx dynamic_block_id[1];
+    if (threadIdx.x == 0) {
+        dynamic_block_id[0] = atomicAdd(blk_id, 1);
+    }
+    __syncthreads();
+    Idx new_warp_id = threadIdx.x / new_warp_size; 
+    Idx tx = threadIdx.x % new_warp_size;
+    Idx start_off = dynamic_block_id[0] * nodes_per_blk;
+    if (start_off + new_warp_id < num_nodes) {
+        //Idx dst_id = __ldg(sorted_node_map + start_off + new_warp_id);
+        Idx dst_id = start_off + new_warp_id;
         Idx beg = __ldg(csr.row_offsets.data + dst_id);
         Idx end = __ldg(csr.row_offsets.data + dst_id + 1);
         for(; tx<feat_len; tx += new_warp_size) {
@@ -636,9 +687,13 @@ int launch_fa_small_feature(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Id
     const int nblks = (num_nodes + nodes_per_blk -1)/nodes_per_blk;
     //LOG(INFO) << "Launch with nblks:" << nblks << " with nthrs:" << nthrs << " new_warp_size:" <<new_warp_size << " nodes per blk:" << nodes_per_blk;
     if (mode == 2) {
+        Idx* blk_id_ptr; 
+        cudaCheck(cudaMalloc(&blk_id_ptr, sizeof(Idx)));
+        cudaCheck(cudaMemset(blk_id_ptr, 0, sizeof(Idx)));
+        cudaDeviceSynchronize();
         beg = std::chrono::steady_clock::now();
-        //FeatureAdaptiveNbAccessKernelWithDynamicBlkIdSharding<Idx, float>
-        //    <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, nodes_per_blk, new_warp_size, node_map);
+        FeatureAdaptiveNbAccessKernelWithAtomicSharding<Idx, float>
+            <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, nodes_per_blk, new_warp_size, blk_id_ptr, node_map);
     } else if (mode == 3) {
         beg = std::chrono::steady_clock::now();
         FeatureAdaptiveNbAccessKernelWithDynamicBlkIdNoAtomicSharding<Idx, float>
@@ -661,13 +716,13 @@ int launch_fa_large_feature(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Id
 
     if (mode == 0) {
         beg = std::chrono::steady_clock::now();
-        if (node_map == nullptr) {
+        //if (node_map == nullptr) {
             FeatureAdaptiveNbAccessKernel<Idx, float>
                 <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges);
-        } else {
-            FeatureAdaptiveNbAccessDegIncKernel<Idx, float>
-                <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, node_map);
-        }
+        //} else {
+        //    FeatureAdaptiveNbAccessDegIncKernel<Idx, float>
+        //        <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, node_map);
+        //}
     } else if (mode == 1) {
         if (node_map == nullptr) {
             LOG(FATAL) << "Mode 1 requires node map to be non-empty";
@@ -682,9 +737,9 @@ int launch_fa_large_feature(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Id
         FeatureAdaptiveNbAccessKernelWithAtomic<Idx, float>
             <<<nblks, nthrs, shared_memory_size_bytes , thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, blk_id_ptr, node_map);
     } else if (mode == 2) {
-        if (node_map == nullptr) {
-            LOG(FATAL) << "Mode 2 requires node map to be non-empty";
-        }
+        //if (node_map == nullptr) {
+            //LOG(FATAL) << "Mode 2 requires node map to be non-empty";
+        //}
         Idx* blk_id_ptr; 
         cudaCheck(cudaMalloc(&blk_id_ptr, sizeof(Idx)));
         cudaCheck(cudaMemset(blk_id_ptr, 0, sizeof(Idx)));
@@ -699,8 +754,11 @@ int launch_fa_large_feature(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Id
         FeatureAdaptiveNbAccessKernelWithDynamicBlkIdNoAtomic<Idx, float>
             <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, nullptr, node_map);
     }
-    else {
-        LOG(FATAL) << "Unrecognized mode " << mode;
+    else if (mode == 4) {
+        beg = std::chrono::steady_clock::now();
+        int nthrs_const = 256;
+        FeatureAdaptiveNbAccessDegIncKernel<Idx, float>
+            <<<nblks, nthrs, 0, thr_entry->stream>>>(csr, feat, feat_len, num_nodes, num_edges, node_map);
     }
     cudaDeviceSynchronize();
     end = std::chrono::steady_clock::now();
@@ -710,8 +768,8 @@ int launch_fa_large_feature(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Id
 template<typename Idx>
 int launch_fa_small(minigun::Csr<Idx> csr, float* feat, Idx feat_len, Idx num_nodes, Idx num_edges, int mode=0, Idx* node_map=nullptr) {
     int ret = 0; 
-    if (mode < 3) {
-        return -1;
+    if (mode < 2) {
+        ret = launch_fa_small_feature(csr, feat, feat_len, num_nodes, num_edges, mode, node_map);
     } else {
         ret = launch_fa_small_feature(csr, feat, feat_len, num_nodes, num_edges, mode, node_map);
     }
@@ -742,86 +800,102 @@ void NbAccessImpl(
         LOG(INFO) << "On average LB takes: " << avg/(times-warm_up_times)  << " micro secs";
         avg = 0.;
         for (int i=0; i<times; i++){
-            auto ret =  launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 0, nullptr);
+            //int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
+            //// Reset the number of nodes
+            //num_nodes = node_map.GetSize()/sizeof(int32_t);
+            auto ret =  launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 4, nullptr);
             if (i >= warm_up_times) {
                 avg += ret;
             }
         }
-        LOG(INFO) << "On average FA static blk id takes: " << avg/(times-warm_up_times)  << " micro secs";
-        avg = 0.;
-        for (int i=0; i<times; i++){
-            int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
-            // Reset the number of nodes
-            num_nodes = node_map.GetSize()/sizeof(int32_t);
-            auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 1, node_map_ptr);
-            if (i >= warm_up_times) {
-                avg += ret;
+        LOG(INFO) << "On average basic takes: " << avg/(times-warm_up_times)  << " micro secs";
+        if (feat_len >= 64) {
+            //avg = 0.;
+            //for (int i=0; i<times; i++){
+            //    int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
+            //    // Reset the number of nodes
+            //    num_nodes = node_map.GetSize()/sizeof(int32_t);
+            //    auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 1, node_map_ptr);
+            //    if (i >= warm_up_times) {
+            //        avg += ret;
+            //    }
+            //}
+            //LOG(INFO) << "On average FA with atomic takes: " << avg/(times-warm_up_times)  << " micro secs";
+            //avg = 0.;
+            //for (int i=0; i<times; i++){
+            //    //int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
+            //    //// Reset the number of nodes
+            //    //num_nodes = node_map.GetSize()/sizeof(int32_t);
+            //    auto ret =  launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 0, nullptr);
+            //    if (i >= warm_up_times) {
+            //        avg += ret;
+            //    }
+            //}
+            //LOG(INFO) << "On average FA takes: " << avg/(times-warm_up_times)  << " micro secs";
+            avg = 0.;
+            for (int i=0; i<times; i++){
+                //int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
+                //// Reset the number of nodes
+                //num_nodes = node_map.GetSize()/sizeof(int32_t);
+                auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 2, nullptr);
+                if (i >= warm_up_times) {
+                    avg += ret;
+                }
             }
-        }
-        LOG(INFO) << "On average FA with atomic takes: " << avg/(times-warm_up_times)  << " micro secs";
-        avg = 0.;
-        for (int i=0; i<times; i++){
-            int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
-            // Reset the number of nodes
-            num_nodes = node_map.GetSize()/sizeof(int32_t);
-            auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 2, node_map_ptr);
-            if (i >= warm_up_times) {
-                avg += ret;
+            LOG(INFO) << "On average FA + atomic blk id takes: " << avg/(times-warm_up_times)  << " micro secs";
+            avg = 0.;
+            for (int i=0; i<times; i++){
+                //int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
+                //// Reset the number of nodes
+                //num_nodes = node_map.GetSize()/sizeof(int32_t);
+                auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 3, nullptr);
+                if (i >= warm_up_times) {
+                    avg += ret;
+                }
             }
+            LOG(INFO) << "On average FA + dynamic takes: " << avg/(times-warm_up_times)  << " micro secs";
         }
-        LOG(INFO) << "On average FA with dynamic blk id takes: " << avg/(times-warm_up_times)  << " micro secs";
-        avg = 0.;
-        for (int i=0; i<times; i++){
-            int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
-            // Reset the number of nodes
-            num_nodes = node_map.GetSize()/sizeof(int32_t);
-            auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 3, node_map_ptr);
-            if (i >= warm_up_times) {
-                avg += ret;
-            }
-        }
-        LOG(INFO) << "On average FA with dynamic blk but no atomic takes: " << avg/(times-warm_up_times)  << " micro secs";
-        avg = 0.;
-        for (int i=0; i<times; i++){
-            num_nodes = deg_inc_node_map.GetSize()/sizeof(int32_t);
-            int32_t* node_map_ptr = static_cast<int32_t*>(deg_inc_node_map->data);
-            auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 0, node_map_ptr);
-            if (i >= warm_up_times) {
-                avg += ret;
-            }
-        }
-        LOG(INFO) << "On average FA static blk id deg_increase access takes: " << avg/(times-warm_up_times)  << " micro secs";
-        avg = 0.;
-        for (int i=0; i<times; i++){
-            num_nodes = deg_inc_node_map.GetSize()/sizeof(int32_t);
-            int32_t* node_map_ptr = static_cast<int32_t*>(deg_inc_node_map->data);
-            auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 3, node_map_ptr);
-            if (i >= warm_up_times) {
-                avg += ret;
-            }
-        }
-        LOG(INFO) << "On average FA with dynamic blk but no atomic and deg_increase access takes: " << avg/(times-warm_up_times)  << " micro secs";
+        //avg = 0.;
+        //for (int i=0; i<times; i++){
+        //    num_nodes = deg_inc_node_map.GetSize()/sizeof(int32_t);
+        //    int32_t* node_map_ptr = static_cast<int32_t*>(deg_inc_node_map->data);
+        //    auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 0, node_map_ptr);
+        //    if (i >= warm_up_times) {
+        //        avg += ret;
+        //    }
+        //}
+        //LOG(INFO) << "On average FA static blk id deg_increase access takes: " << avg/(times-warm_up_times)  << " micro secs";
+        //avg = 0.;
+        //for (int i=0; i<times; i++){
+        //    num_nodes = deg_inc_node_map.GetSize()/sizeof(int32_t);
+        //    int32_t* node_map_ptr = static_cast<int32_t*>(deg_inc_node_map->data);
+        //    auto ret = launch_fa_large_feature<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 3, node_map_ptr);
+        //    if (i >= warm_up_times) {
+        //        avg += ret;
+        //    }
+        //}
+        //LOG(INFO) << "On average FA with dynamic blk but no atomic and deg_increase access takes: " << avg/(times-warm_up_times)  << " micro secs";
         if (feat_len < 64) {
             avg = 0.;
             for (int i=0; i<times; i++){
-                num_nodes = deg_inc_node_map.GetSize()/sizeof(int32_t);
-                int32_t* node_map_ptr = static_cast<int32_t*>(deg_inc_node_map->data);
-                auto ret =  launch_fa_small<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 3, node_map_ptr);
+                //num_nodes = deg_inc_node_map.GetSize()/sizeof(int32_t);
+                //int32_t* node_map_ptr = static_cast<int32_t*>(deg_inc_node_map->data);
+                auto ret =  launch_fa_small<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 2, nullptr);
                 if (i >= warm_up_times) {
                     avg += ret;
                 }
             }
-            LOG(INFO) << "On average FA small deg_increase access takes: " << avg/(times-warm_up_times)  << " micro secs";
+            LOG(INFO) << "On average FA + atomic access takes: " << avg/(times-warm_up_times)  << " micro secs";
             avg = 0.;
             for (int i=0; i<times; i++){
-                num_nodes = node_map.GetSize()/sizeof(int32_t);
-                int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
-                auto ret =  launch_fa_small<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 3, node_map_ptr);
+                //num_nodes = node_map.GetSize()/sizeof(int32_t);
+                //int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
+                auto ret =  launch_fa_small<int32_t>(csr, feat_ptr, feat_len, num_nodes, num_edges, 3, nullptr);
                 if (i >= warm_up_times) {
                     avg += ret;
                 }
             }
-            LOG(INFO) << "On average FA small deg_decrease access takes: " << avg/(times-warm_up_times)  << " micro secs";
+            LOG(INFO) << "On average FA + dynamic access takes: " << avg/(times-warm_up_times)  << " micro secs";
         }
     }
 
