@@ -690,7 +690,7 @@ std::vector<std::vector<dgl_id_t>> unzip(const std::vector<std::vector<dgl_id_t>
 std::vector<IdArray> Graph::GetCsrSortedByEdgeType(bool transpose) {
   int flag = int(transpose);
   if (cached_[flag].size() == 0) {
-    LOG(INFO) << "Here in graph get csr sorted by edge type out_csr?" <<transpose;
+    //LOG(INFO) << "Here in graph get csr sorted by edge type out_csr?" <<transpose;
     uint64_t num_edges = NumEdges();
     uint64_t num_nodes = NumVertices();
     IdArray indptr = IdArray::Empty(

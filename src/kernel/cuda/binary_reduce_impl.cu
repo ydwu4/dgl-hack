@@ -787,7 +787,7 @@ void NbAccessImpl(
         minigun::Csr<int32_t> csr = utils::CreateCsr<int32_t>(incsr.indptr, incsr.indices);
         int32_t num_nodes = csr.row_offsets.length;
         int32_t num_edges = csr.column_indices.length;
-        LOG(INFO)<<"feat_len:" << feat_len <<" num_nodes:" << num_nodes << " num_edges:" << num_edges;
+        LOG(INFO)<<"\nfeat_len:" << feat_len <<" num_nodes:" << num_nodes << " num_edges:" << num_edges;
         float avg = 0.;
         int times = 15;
         int warm_up_times = 5;
@@ -797,7 +797,7 @@ void NbAccessImpl(
                 avg += ret;
             }
         }
-        LOG(INFO) << "On average LB takes: " << avg/(times-warm_up_times)  << " micro secs";
+        LOG(INFO) << "On average baseline takes: " << avg/(times-warm_up_times)  << " us";
         avg = 0.;
         for (int i=0; i<times; i++){
             //int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
@@ -808,7 +808,7 @@ void NbAccessImpl(
                 avg += ret;
             }
         }
-        LOG(INFO) << "On average basic takes: " << avg/(times-warm_up_times)  << " micro secs";
+        LOG(INFO) << "On average basic takes: " << avg/(times-warm_up_times)  << " us";
         if (feat_len >= 64) {
             //avg = 0.;
             //for (int i=0; i<times; i++){
@@ -820,7 +820,7 @@ void NbAccessImpl(
             //        avg += ret;
             //    }
             //}
-            //LOG(INFO) << "On average FA with atomic takes: " << avg/(times-warm_up_times)  << " micro secs";
+            //LOG(INFO) << "On average FA with atomic takes: " << avg/(times-warm_up_times)  << " us";
             //avg = 0.;
             //for (int i=0; i<times; i++){
             //    //int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
@@ -831,7 +831,7 @@ void NbAccessImpl(
             //        avg += ret;
             //    }
             //}
-            //LOG(INFO) << "On average FA takes: " << avg/(times-warm_up_times)  << " micro secs";
+            //LOG(INFO) << "On average FA takes: " << avg/(times-warm_up_times)  << " us";
             avg = 0.;
             for (int i=0; i<times; i++){
                 //int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
@@ -842,7 +842,7 @@ void NbAccessImpl(
                     avg += ret;
                 }
             }
-            LOG(INFO) << "On average FA + atomic blk id takes: " << avg/(times-warm_up_times)  << " micro secs";
+            LOG(INFO) << "On average FA + atomic takes: " << avg/(times-warm_up_times)  << " us";
             avg = 0.;
             for (int i=0; i<times; i++){
                 //int32_t* node_map_ptr = static_cast<int32_t*>(node_map->data);
@@ -853,7 +853,7 @@ void NbAccessImpl(
                     avg += ret;
                 }
             }
-            LOG(INFO) << "On average FA + dynamic takes: " << avg/(times-warm_up_times)  << " micro secs";
+            LOG(INFO) << "On average FA + dynamic takes: " << avg/(times-warm_up_times)  << " us";
         }
         //avg = 0.;
         //for (int i=0; i<times; i++){
@@ -864,7 +864,7 @@ void NbAccessImpl(
         //        avg += ret;
         //    }
         //}
-        //LOG(INFO) << "On average FA static blk id deg_increase access takes: " << avg/(times-warm_up_times)  << " micro secs";
+        //LOG(INFO) << "On average FA static blk id deg_increase access takes: " << avg/(times-warm_up_times)  << " us";
         //avg = 0.;
         //for (int i=0; i<times; i++){
         //    num_nodes = deg_inc_node_map.GetSize()/sizeof(int32_t);
@@ -874,7 +874,7 @@ void NbAccessImpl(
         //        avg += ret;
         //    }
         //}
-        //LOG(INFO) << "On average FA with dynamic blk but no atomic and deg_increase access takes: " << avg/(times-warm_up_times)  << " micro secs";
+        //LOG(INFO) << "On average FA with dynamic blk but no atomic and deg_increase access takes: " << avg/(times-warm_up_times)  << " us";
         if (feat_len < 64) {
             avg = 0.;
             for (int i=0; i<times; i++){
@@ -885,7 +885,7 @@ void NbAccessImpl(
                     avg += ret;
                 }
             }
-            LOG(INFO) << "On average FA + atomic access takes: " << avg/(times-warm_up_times)  << " micro secs";
+            LOG(INFO) << "On average FA + atomic takes: " << avg/(times-warm_up_times)  << " us";
             avg = 0.;
             for (int i=0; i<times; i++){
                 //num_nodes = node_map.GetSize()/sizeof(int32_t);
@@ -895,7 +895,7 @@ void NbAccessImpl(
                     avg += ret;
                 }
             }
-            LOG(INFO) << "On average FA + dynamic access takes: " << avg/(times-warm_up_times)  << " micro secs";
+            LOG(INFO) << "On average FA + dynamic takes: " << avg/(times-warm_up_times)  << " us";
         }
     }
 
@@ -1300,7 +1300,7 @@ void BackwardFusedGatKernelImpl(
         int nblks_y = std::min(gdata.n, MAX_NBLKS);
         const dim3 nthrs(nthrs_x, nthrs_y);
         const dim3 nblks(nblks_x, nblks_y);
-        LOG(INFO) << "GradFeatSrc kernel blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
+        //LOG(INFO) << "GradFeatSrc kernel blk dim:" << nblks_x << "*" <<nblks_y << " thr dim:" <<nthrs_x << "*" << nthrs_y;
         fusedGatBackwardGradFeatSrc<<<nblks, nthrs, 0, thr_entry->stream>>>(gdata, ocsr);
         //const dim3 nthrs3(nthrs_y, nthrs_x);
         //fusedGatBackwardGradElEr4<<<nblks, nthrs3, 0, thr_entry->stream>>>(gdata, ocsr);
